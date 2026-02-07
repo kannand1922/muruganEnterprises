@@ -1,0 +1,21 @@
+.DS_Store
+node_modules/
+dist/
+build/
+# shared/
+# stock/
+# scanner/
+Goddown/
+stockLens/
+myApp/
+
+
+server/receipts/
+
+
+# logs / temp
+*.log
+
+# IDE
+.vscode/
+.idea/

@@ -1,0 +1,20 @@
+{
+  "name": "murugan-enterprises",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "Cycle",
+    "stockLens",
+    "printer"
+  ],
+  "scripts": {
+    "dev:cycle": "npm --prefix Cycle run dev",
+    "dev:stockLens": "npm --prefix stockLens run dev",
+    "dev:printer": "npm --prefix printer run dev",
+    "start:printer": "npm --prefix printer run start",
+    "build:cycle": "npm --prefix Cycle run build",
+    "build:stockLens": "npm --prefix stockLens run build",
+    "lint:cycle": "npm --prefix Cycle run lint",
+    "lint:stockLens": "npm --prefix stockLens run lint"
+  }
+}
