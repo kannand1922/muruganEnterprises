@@ -15,7 +15,7 @@ const myAppPaths = {
   dataDir: MY_APP_DIR,
   productsCsv: path.join(MY_APP_DIR, "products.csv"),
   printersCsv: path.join(MY_APP_DIR, "printers.csv"),
-  brandsCsv: path.join(MY_APP_DIR, "brands.csv"),
+  brandsCsv: "M://STOCK.csv",
 };
 
 const stockLensPaths = {
@@ -23,7 +23,7 @@ const stockLensPaths = {
   cyclesDir: STOCK_LENS_CYCLES_DIR,
   productsCsv: path.join(STOCK_LENS_DIR, "products.csv"),
   printersCsv: path.join(STOCK_LENS_DIR, "printers.csv"),
-  brandsCsv: path.join(STOCK_LENS_DIR, "brands.csv"),
+  brandsCsv: "M://STOCK.csv",
   cycleManagementCsv: path.join(STOCK_LENS_DIR, "cycle.csv"),
   bestSellingCsv: path.join(STOCK_LENS_DIR, "bestselling.csv"),
   workerCsv: path.join(STOCK_LENS_DIR, "worker.csv"),
