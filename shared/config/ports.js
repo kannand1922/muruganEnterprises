@@ -1,4 +1,4 @@
 module.exports = {
-  printerServerPort: 3000,
+  printerServerPort: 4000,
   defaultPrinterPort: 9100,
 };
