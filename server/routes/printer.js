@@ -15,6 +15,11 @@ const { markPrinted } = require("../pool/codePool");
 let usedCodes = new Set();
 let codeCounter = 1;
 const DEFAULT_SLICE_HEIGHT_PX = 1200;
+const RECEIPTS_DIR = path.join(__dirname, "..", "receipts");
+const PUPPETEER_LAUNCH_TIMEOUT_MS = Number.parseInt(
+  process.env.PUPPETEER_LAUNCH_TIMEOUT_MS || "60000",
+  10
+);
 
 const ensureDirExists = (dirPath) => {
   if (!fs.existsSync(dirPath)) {
@@ -87,22 +92,46 @@ async function getBrowserInstance() {
     return browserInitPromise;
   }
 
-  browserInitPromise = puppeteer.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-accelerated-2d-canvas",
-      "--no-first-run",
-      "--no-zygote",
-      "--disable-gpu"
-    ],
-  }).then(browser => {
-    browserInstance = browser;
+  browserInitPromise = (async () => {
+    let lastError;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        const browser = await puppeteer.launch({
+          headless: true,
+          timeout: Number.isFinite(PUPPETEER_LAUNCH_TIMEOUT_MS)
+            ? PUPPETEER_LAUNCH_TIMEOUT_MS
+            : 60000,
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-accelerated-2d-canvas",
+            "--no-first-run",
+            "--no-zygote",
+            "--disable-gpu",
+          ],
+        });
+        browserInstance = browser;
+        browser.on("disconnected", () => {
+          browserInstance = null;
+        });
+        console.log(`✅ Browser instance initialized (attempt ${attempt})`);
+        return browser;
+      } catch (error) {
+        lastError = error;
+        console.error(
+          `⚠️ Browser launch attempt ${attempt} failed: ${error.message}`
+        );
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+    }
+
+    browserInstance = null;
+    throw lastError;
+  })().finally(() => {
     browserInitPromise = null;
-    console.log("✅ Browser instance initialized");
-    return browser;
   });
 
   return browserInitPromise;
@@ -125,23 +154,61 @@ class PerformanceLogger {
     this.jobId = jobId;
     this.startTime = Date.now();
     this.checkpoints = [];
+    this.stepCounter = 1;
   }
 
   log(label) {
     const elapsed = Date.now() - this.startTime;
-    this.checkpoints.push({ label, elapsed });
-    console.log(`⏱️  [${this.jobId}] ${label}: ${elapsed}ms`);
+    const step = this.stepCounter++;
+    this.checkpoints.push({ step, label, elapsed });
+    console.log(`⏱️  [${this.jobId}] [${step}] ${label}: ${elapsed}ms`);
   }
 
   summary() {
     const total = Date.now() - this.startTime;
     console.log(`\n📊 Performance Summary [${this.jobId}]:`);
     this.checkpoints.forEach(cp => {
-      console.log(`   ${cp.label}: ${cp.elapsed}ms`);
+      console.log(`   [${cp.step}] ${cp.label}: ${cp.elapsed}ms`);
     });
     console.log(`   TOTAL TIME: ${total}ms\n`);
     return total;
   }
+}
+
+function formatLogMeta(meta) {
+  if (meta === undefined || meta === null) return "";
+  if (typeof meta === "string") return meta;
+  try {
+    return JSON.stringify(meta);
+  } catch (error) {
+    return String(meta);
+  }
+}
+
+function createRequestStepLogger(requestId) {
+  const requestStart = Date.now();
+  let step = 1;
+
+  return {
+    step(label, meta) {
+      const elapsed = Date.now() - requestStart;
+      const metaText = formatLogMeta(meta);
+      console.log(
+        `🧭 [${requestId}] [${step++}] ${label} (${elapsed}ms)${
+          metaText ? ` | ${metaText}` : ""
+        }`
+      );
+    },
+    error(label, error, meta) {
+      const elapsed = Date.now() - requestStart;
+      const metaText = formatLogMeta(meta);
+      console.error(
+        `❌ [${requestId}] [${step++}] ${label} FAILED (${elapsed}ms): ${
+          error?.message || error
+        }${metaText ? ` | ${metaText}` : ""}`
+      );
+    },
+  };
 }
 
 // ============================================
@@ -699,17 +766,14 @@ async function htmlToImageAndSave(html, uniqueCode, suffix = "", perf) {
       deviceScaleFactor: 2,
     });
 
-    const receiptsDir = path.join(__dirname, "receipts");
-    if (!fs.existsSync(receiptsDir)) {
-      fs.mkdirSync(receiptsDir, { recursive: true });
-    }
+    ensureDirExists(RECEIPTS_DIR);
 
     const htmlPath = path.join(
-      receiptsDir,
+      RECEIPTS_DIR,
       `receipt_${uniqueCode}${suffix}.html`
     );
     const imagePath = path.join(
-      receiptsDir,
+      RECEIPTS_DIR,
       `receipt_${uniqueCode}${suffix}.png`
     );
 
@@ -735,6 +799,7 @@ async function htmlToImageAndSave(html, uniqueCode, suffix = "", perf) {
       dimensions,
     };
   } catch (error) {
+    perf?.log(`ERROR rendering${suffix}: ${error.message}`);
     console.error(`Error generating receipt${suffix}:`, error);
     return {
       success: false,
@@ -757,7 +822,7 @@ function slicePng(png, offsetY, sliceHeight) {
   return slice;
 }
 
-async function printImageInSlices(printer, imagePath, options = {}) {
+async function printImageInSlices(printer, imagePath, options = {}, perf) {
   const {
     sliceHeight = DEFAULT_SLICE_HEIGHT_PX,
     align = "center",
@@ -768,8 +833,12 @@ async function printImageInSlices(printer, imagePath, options = {}) {
   const totalHeight = png.height;
   const effectiveSliceHeight = Math.max(1, Math.floor(sliceHeight));
   const totalSlices = Math.ceil(totalHeight / effectiveSliceHeight);
+  perf?.log(
+    `Image loaded for print: ${path.basename(imagePath)} (${png.width}x${png.height}), slices=${totalSlices}`
+  );
 
   for (let sliceIndex = 0; sliceIndex < totalSlices; sliceIndex += 1) {
+    perf?.log(`Printing slice ${sliceIndex + 1}/${totalSlices}`);
     const offsetY = sliceIndex * effectiveSliceHeight;
     const currentHeight = Math.min(
       effectiveSliceHeight,
@@ -789,12 +858,15 @@ async function printImageInSlices(printer, imagePath, options = {}) {
     await printer.printImageBuffer(sliceBuffer);
     await printer.execute();
     printer.clear();
+    perf?.log(`Slice ${sliceIndex + 1}/${totalSlices} sent`);
   }
 
   if (cutAfter) {
+    perf?.log("Sending cut command");
     printer.cut();
     await printer.execute();
     printer.clear();
+    perf?.log("Cut command completed");
   }
 
   return {
@@ -838,15 +910,25 @@ async function printReceiptWithHTML(printer, printData) {
 
     // Print both receipts
     perf.log("Sending to printer - Receipt 1");
-    await printImageInSlices(printer, resultWithQR.imagePath, {
-      cutAfter: true,
-    });
+    await printImageInSlices(
+      printer,
+      resultWithQR.imagePath,
+      {
+        cutAfter: true,
+      },
+      perf
+    );
     perf.log("Receipt 1 printed");
 
     perf.log("Sending to printer - Receipt 2");
-    await printImageInSlices(printer, resultWithoutQR.imagePath, {
-      cutAfter: true,
-    });
+    await printImageInSlices(
+      printer,
+      resultWithoutQR.imagePath,
+      {
+        cutAfter: true,
+      },
+      perf
+    );
     perf.log("Receipt 2 printed");
 
     try {
@@ -866,12 +948,12 @@ async function printReceiptWithHTML(printer, printData) {
         withQR: {
           htmlPath: resultWithQR.htmlPath,
           imagePath: resultWithQR.imagePath,
-          viewUrl: `http://localhost:3000/receipt/${uniqueCode}_with_qr.html`,
+          viewPath: `/receipts/receipt_${uniqueCode}_with_qr.html`,
         },
         withoutQR: {
           htmlPath: resultWithoutQR.htmlPath,
           imagePath: resultWithoutQR.imagePath,
-          viewUrl: `http://localhost:3000/receipt/${uniqueCode}_no_qr.html`,
+          viewPath: `/receipts/receipt_${uniqueCode}_no_qr.html`,
         },
       },
     };
@@ -908,9 +990,14 @@ async function printGoddownReceiptWithHTML(printer, printData) {
     }
 
     perf.log("Sending to printer");
-    await printImageInSlices(printer, resultWithQR.imagePath, {
-      cutAfter: true,
-    });
+    await printImageInSlices(
+      printer,
+      resultWithQR.imagePath,
+      {
+        cutAfter: true,
+      },
+      perf
+    );
     perf.log("Receipt printed");
 
     try {
@@ -930,7 +1017,7 @@ async function printGoddownReceiptWithHTML(printer, printData) {
         withQR: {
           htmlPath: resultWithQR.htmlPath,
           imagePath: resultWithQR.imagePath,
-          viewUrl: `http://localhost:3000/receipt/${uniqueCode}_with_qr.html`,
+          viewPath: `/receipts/receipt_${uniqueCode}_with_qr.html`,
         },
       },
     };
@@ -952,17 +1039,27 @@ async function printHtmlBlock(printer, htmlContent, jobLabel = "report", copies 
   const sanitizedCopies = Math.max(1, parseInt(copies, 10) || 1);
   const uniqueCode = `${jobLabel}_${Date.now()}`;
   const perf = new PerformanceLogger(uniqueCode);
+  perf.log("HTML print job received");
   
   const renderResult = await htmlToImageAndSave(htmlContent, uniqueCode, "_custom", perf);
+  perf.log("HTML render complete");
 
   if (!renderResult.success) {
+    perf.log(`Render failed: ${renderResult.error || "unknown error"}`);
     throw new Error(renderResult.error || "Failed to render printable HTML");
   }
 
   for (let i = 0; i < sanitizedCopies; i++) {
-    await printImageInSlices(printer, renderResult.imagePath, {
-      cutAfter: true,
-    });
+    perf.log(`Printing copy ${i + 1}/${sanitizedCopies}`);
+    await printImageInSlices(
+      printer,
+      renderResult.imagePath,
+      {
+        cutAfter: true,
+      },
+      perf
+    );
+    perf.log(`Copy ${i + 1}/${sanitizedCopies} printed`);
   }
 
   perf.summary();
@@ -994,6 +1091,34 @@ async function printSampleSlip(printer, copies = 1) {
   };
 }
 
+function buildReceiptViewUrl(req, receiptEntry) {
+  if (!receiptEntry || !receiptEntry.viewPath) {
+    return receiptEntry;
+  }
+  const host = req.get("host");
+  const protocol = req.protocol || "http";
+  return {
+    ...receiptEntry,
+    viewUrl: `${protocol}://${host}${receiptEntry.viewPath}`,
+  };
+}
+
+function attachReceiptViewUrls(req, result) {
+  if (!result || !result.receipts) {
+    return result;
+  }
+
+  const nextReceipts = {};
+  Object.entries(result.receipts).forEach(([key, value]) => {
+    nextReceipts[key] = buildReceiptViewUrl(req, value);
+  });
+
+  return {
+    ...result,
+    receipts: nextReceipts,
+  };
+}
+
 // ============================================
 // API ROUTES WITH DETAILED LOGGING
 // ============================================
@@ -1001,16 +1126,26 @@ function registerPrinterRoutes(app) {
   app.get("/api/print/sample/:ip", async (req, res) => {
     const requestStart = Date.now();
     console.log(`\n🔷 NEW SAMPLE PRINT REQUEST: ${new Date().toISOString()}`);
+    const requestLogger = createRequestStepLogger(
+      `sample-${req.params.ip}-${requestStart}`
+    );
+    requestLogger.step("Request received");
 
     try {
       const printerIP = req.params.ip;
       const port = req.query.port || 9100;
       const copies = req.query.copies || 1;
+      requestLogger.step("Parsed request parameters", {
+        printerIP,
+        port,
+        copies,
+      });
 
       console.log(`📍 Printer IP: ${printerIP}:${port}`);
       console.log(`🧾 Sample copies: ${copies}`);
 
       if (!printerIP || typeof printerIP !== "string") {
+        requestLogger.step("Validation failed: printer IP missing");
         return res.status(400).json({
           success: false,
           message: "Printer IP is required",
@@ -1018,17 +1153,23 @@ function registerPrinterRoutes(app) {
       }
 
       const printer = createPrinterByIP(printerIP, port);
+      requestLogger.step("Printer instance created");
 
       try {
+        requestLogger.step("Checking printer connectivity");
         const connected = await printer.isPrinterConnected();
         if (connected === false) {
           throw new Error(`Printer not reachable at ${printerIP}:${port}`);
         }
+        requestLogger.step("Printer connectivity confirmed");
       } catch (connectError) {
+        requestLogger.error("Printer connectivity check", connectError);
         throw new Error(connectError.message || "Failed to verify printer connectivity");
       }
 
+      requestLogger.step("Sending sample print");
       const result = await printSampleSlip(printer, copies);
+      requestLogger.step("Sample print completed", result);
       const totalRequestTime = Date.now() - requestStart;
       console.log(`✅ Sample print request completed in ${totalRequestTime}ms\n`);
 
@@ -1042,6 +1183,7 @@ function registerPrinterRoutes(app) {
       });
     } catch (error) {
       const totalRequestTime = Date.now() - requestStart;
+      requestLogger.error("Sample print request", error);
       console.error(
         `❌ Sample print failed after ${totalRequestTime}ms:`,
         error.message
@@ -1058,16 +1200,28 @@ function registerPrinterRoutes(app) {
   app.post("/api/print/ip/:ip", async (req, res) => {
     const requestStart = Date.now();
     console.log(`\n🔷 NEW PRINT REQUEST: ${new Date().toISOString()}`);
+    const requestLogger = createRequestStepLogger(
+      `print-${req.params.ip}-${requestStart}`
+    );
+    requestLogger.step("Request received");
     
     try {
       const printerIP = req.params.ip;
       const port = req.query.port || 9100;
       const { scannedItems, addOns, uniqueCode, totalValue, totalQuantity } = req.body;
+      requestLogger.step("Parsed request payload", {
+        printerIP,
+        port,
+        uniqueCode,
+        items: scannedItems?.length || 0,
+        addOns: addOns?.length || 0,
+      });
 
       console.log(`📍 Printer IP: ${printerIP}:${port}`);
       console.log(`📦 Items: ${scannedItems?.length || 0}, AddOns: ${addOns?.length || 0}`);
 
       if (!scannedItems || !Array.isArray(scannedItems)) {
+        requestLogger.step("Validation failed: scannedItems missing/invalid");
         return res.status(400).json({
           success: false,
           message: "Invalid or missing scannedItems data",
@@ -1075,6 +1229,7 @@ function registerPrinterRoutes(app) {
       }
 
       const printer = createPrinterByIP(printerIP, port);
+      requestLogger.step("Printer instance created");
       const printData = {
         totalQuantity,
         totalValue,
@@ -1084,6 +1239,7 @@ function registerPrinterRoutes(app) {
       };
 
       try {
+        requestLogger.step("Writing print payload log");
         logPrintPayload(
           "myapp",
           {
@@ -1100,11 +1256,21 @@ function registerPrinterRoutes(app) {
             port,
           }
         );
+        requestLogger.step("Print payload log saved");
       } catch (error) {
+        requestLogger.error("Writing print payload log", error);
         console.error("Failed to log myApp print payload:", error.message);
       }
 
-      const result = await printReceiptWithHTML(printer, printData);
+      requestLogger.step("Starting receipt render + print pipeline");
+      const result = attachReceiptViewUrls(
+        req,
+        await printReceiptWithHTML(printer, printData)
+      );
+      requestLogger.step("Print pipeline finished", {
+        success: result.success,
+        message: result.message,
+      });
 
       const totalRequestTime = Date.now() - requestStart;
       console.log(`✅ Total API request time: ${totalRequestTime}ms\n`);
@@ -1118,6 +1284,7 @@ function registerPrinterRoutes(app) {
       });
     } catch (error) {
       const totalRequestTime = Date.now() - requestStart;
+      requestLogger.error("Print request", error);
       console.error(`❌ Request failed after ${totalRequestTime}ms:`, error.message);
       
       res.status(500).json({
@@ -1131,6 +1298,10 @@ function registerPrinterRoutes(app) {
   app.post("/api/print/ip-goddown/:ip", async (req, res) => {
     const requestStart = Date.now();
     console.log(`\n🔷 NEW GODDOWN PRINT REQUEST: ${new Date().toISOString()}`);
+    const requestLogger = createRequestStepLogger(
+      `goddown-print-${req.params.ip}-${requestStart}`
+    );
+    requestLogger.step("Request received");
     
     try {
       const printerIP = req.params.ip;
@@ -1143,12 +1314,21 @@ function registerPrinterRoutes(app) {
         totalQuantity,
         operatorName,
       } = req.body;
+      requestLogger.step("Parsed request payload", {
+        printerIP,
+        port,
+        uniqueCode,
+        items: scannedItems?.length || 0,
+        addOns: addOns?.length || 0,
+        operatorName: operatorName || "",
+      });
 
       console.log(`📍 Printer IP: ${printerIP}:${port}`);
       console.log(`📦 Items: ${scannedItems?.length || 0}, AddOns: ${addOns?.length || 0}`);
       console.log(`👤 Operator: ${operatorName || 'N/A'}`);
 
       if (!scannedItems || !Array.isArray(scannedItems)) {
+        requestLogger.step("Validation failed: scannedItems missing/invalid");
         return res.status(400).json({
           success: false,
           message: "Invalid or missing scannedItems data",
@@ -1160,6 +1340,7 @@ function registerPrinterRoutes(app) {
         (operatorName || operatorHeader || "").toString().trim();
 
       const printer = createPrinterByIP(printerIP, port);
+      requestLogger.step("Printer instance created");
       const printData = {
         totalQuantity,
         totalValue,
@@ -1170,6 +1351,7 @@ function registerPrinterRoutes(app) {
       };
 
       try {
+        requestLogger.step("Writing print payload log");
         logPrintPayload(
           "goddown",
           {
@@ -1187,11 +1369,21 @@ function registerPrinterRoutes(app) {
             port,
           }
         );
+        requestLogger.step("Print payload log saved");
       } catch (error) {
+        requestLogger.error("Writing print payload log", error);
         console.error("Failed to log goddown print payload:", error.message);
       }
 
-      const result = await printGoddownReceiptWithHTML(printer, printData);
+      requestLogger.step("Starting receipt render + print pipeline");
+      const result = attachReceiptViewUrls(
+        req,
+        await printGoddownReceiptWithHTML(printer, printData)
+      );
+      requestLogger.step("Print pipeline finished", {
+        success: result.success,
+        message: result.message,
+      });
 
       const totalRequestTime = Date.now() - requestStart;
       console.log(`✅ Total API request time: ${totalRequestTime}ms\n`);
@@ -1205,6 +1397,7 @@ function registerPrinterRoutes(app) {
       });
     } catch (error) {
       const totalRequestTime = Date.now() - requestStart;
+      requestLogger.error("Goddown print request", error);
       console.error(`❌ Request failed after ${totalRequestTime}ms:`, error.message);
       
       res.status(500).json({
@@ -1218,15 +1411,27 @@ function registerPrinterRoutes(app) {
   app.post("/api/print/html", async (req, res) => {
     const requestStart = Date.now();
     console.log(`\n🔷 NEW HTML PRINT REQUEST: ${new Date().toISOString()}`);
+    const requestLogger = createRequestStepLogger(
+      `html-print-${requestStart}`
+    );
+    requestLogger.step("Request received");
     
     try {
       const { printerIP, port = 9100, htmlContent, jobLabel = "cycle_report", copies = 1 } =
         req.body || {};
+      requestLogger.step("Parsed request payload", {
+        printerIP,
+        port,
+        jobLabel,
+        copies,
+        htmlLength: typeof htmlContent === "string" ? htmlContent.length : 0,
+      });
 
       console.log(`📍 Printer IP: ${printerIP}:${port}`);
       console.log(`📄 Job: ${jobLabel}, Copies: ${copies}`);
 
       if (!printerIP || typeof printerIP !== "string") {
+        requestLogger.step("Validation failed: printerIP missing");
         return res.status(400).json({
           success: false,
           message: "Printer IP is required",
@@ -1234,6 +1439,7 @@ function registerPrinterRoutes(app) {
       }
 
       if (!htmlContent || typeof htmlContent !== "string" || !htmlContent.trim()) {
+        requestLogger.step("Validation failed: htmlContent missing");
         return res.status(400).json({
           success: false,
           message: "Printable HTML content is required",
@@ -1241,7 +1447,13 @@ function registerPrinterRoutes(app) {
       }
 
       const printer = createPrinterByIP(printerIP, port);
+      requestLogger.step("Printer instance created");
+      requestLogger.step("Starting HTML print pipeline");
       const result = await printHtmlBlock(printer, htmlContent, jobLabel, copies);
+      requestLogger.step("HTML print pipeline finished", {
+        success: true,
+        referenceCode: result.referenceCode,
+      });
 
       const totalRequestTime = Date.now() - requestStart;
       console.log(`✅ Total API request time: ${totalRequestTime}ms\n`);
@@ -1256,6 +1468,7 @@ function registerPrinterRoutes(app) {
       });
     } catch (error) {
       const totalRequestTime = Date.now() - requestStart;
+      requestLogger.error("HTML print request", error);
       console.error(`❌ HTML print failed after ${totalRequestTime}ms:`, error);
       
       res.status(500).json({
@@ -1266,7 +1479,8 @@ function registerPrinterRoutes(app) {
     }
   });
 
-  app.use("/receipts", express.static(path.join(__dirname, "receipts")));
+  ensureDirExists(RECEIPTS_DIR);
+  app.use("/receipts", express.static(RECEIPTS_DIR));
 
   app.get("/api/print/status", (req, res) => {
     res.json({
