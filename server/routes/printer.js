@@ -4,13 +4,13 @@ const fs = require("fs");
 const QRCode = require("qrcode");
 const puppeteer = require("puppeteer");
 const { PNG } = require("pngjs");
-const { printLogPaths } = require("./path");
+const { printLogPaths } = require("../path/path");
 const {
   ThermalPrinter,
   PrinterTypes,
   CharacterSet,
 } = require("node-thermal-printer");
-const { markPrinted } = require("./codePool");
+const { markPrinted } = require("../pool/codePool");
 
 let usedCodes = new Set();
 let codeCounter = 1;
