@@ -4,14 +4,13 @@ const fs = require("fs");
 const QRCode = require("qrcode");
 const puppeteer = require("puppeteer");
 const { PNG } = require("pngjs");
-const { printLogPaths } = require("../path/path");
-const { defaultPrinterPort } = require("../../shared/config/ports");
+const { printLogPaths } = require("./path");
 const {
   ThermalPrinter,
   PrinterTypes,
   CharacterSet,
 } = require("node-thermal-printer");
-const { markPrinted } = require("../pool/codePool");
+const { markPrinted } = require("./codePool");
 
 let usedCodes = new Set();
 let codeCounter = 1;
@@ -251,7 +250,7 @@ function buildGoddownQrPayloadWithAddOns(scannedItems, addOns) {
   return payloads.join("\n+\n");
 }
 
-function createPrinterByIP(ip, printerPort = defaultPrinterPort) {
+function createPrinterByIP(ip, printerPort = 9100) {
   return new ThermalPrinter({
     type: PrinterTypes.EPSON,
     interface: `tcp://${ip}:${printerPort}`,
@@ -700,7 +699,7 @@ async function htmlToImageAndSave(html, uniqueCode, suffix = "", perf) {
       deviceScaleFactor: 2,
     });
 
-    const receiptsDir = path.join(__dirname, "..", "receipts");
+    const receiptsDir = path.join(__dirname, "receipts");
     if (!fs.existsSync(receiptsDir)) {
       fs.mkdirSync(receiptsDir, { recursive: true });
     }
@@ -815,14 +814,6 @@ async function printReceiptWithHTML(printer, printData) {
   try {
     perf.log("API request received");
 
-    // Lock the code as soon as a print is initiated to prevent reuse,
-    // even if a later step fails after the printer has already started.
-    try {
-      await markPrinted("myapp", uniqueCode, "print_started");
-    } catch (error) {
-      console.error("Failed to lock code on print start:", error.message);
-    }
-
     // Generate both HTMLs in parallel
     const [htmlWithQR, htmlWithoutQR] = await Promise.all([
       generateReceiptHTML(printData, true),
@@ -857,6 +848,12 @@ async function printReceiptWithHTML(printer, printData) {
       cutAfter: true,
     });
     perf.log("Receipt 2 printed");
+
+    try {
+      await markPrinted("myapp", uniqueCode, "printed_success");
+    } catch (error) {
+      console.error("Failed to mark code as printed:", error.message);
+    }
 
     const totalTime = perf.summary();
 
@@ -895,14 +892,6 @@ async function printGoddownReceiptWithHTML(printer, printData) {
   try {
     perf.log("API request received");
 
-    // Lock the code as soon as a print is initiated to prevent reuse,
-    // even if a later step fails after the printer has already started.
-    try {
-      await markPrinted("goddown", uniqueCode, "print_started");
-    } catch (error) {
-      console.error("Failed to lock code on print start:", error.message);
-    }
-
     const htmlWithQR = await generateGoddownReceiptHTML(printData, true);
     perf.log("HTML generated");
 
@@ -923,6 +912,12 @@ async function printGoddownReceiptWithHTML(printer, printData) {
       cutAfter: true,
     });
     perf.log("Receipt printed");
+
+    try {
+      await markPrinted("goddown", uniqueCode, "printed_success");
+    } catch (error) {
+      console.error("Failed to mark code as printed:", error.message);
+    }
 
     const totalTime = perf.summary();
 
@@ -988,7 +983,7 @@ function registerPrinterRoutes(app) {
     
     try {
       const printerIP = req.params.ip;
-      const port = req.query.port || defaultPrinterPort;
+      const port = req.query.port || 9100;
       const { scannedItems, addOns, uniqueCode, totalValue, totalQuantity } = req.body;
 
       console.log(`📍 Printer IP: ${printerIP}:${port}`);
@@ -1061,7 +1056,7 @@ function registerPrinterRoutes(app) {
     
     try {
       const printerIP = req.params.ip;
-      const port = req.query.port || defaultPrinterPort;
+      const port = req.query.port || 9100;
       const {
         scannedItems,
         addOns,
@@ -1147,7 +1142,7 @@ function registerPrinterRoutes(app) {
     console.log(`\n🔷 NEW HTML PRINT REQUEST: ${new Date().toISOString()}`);
     
     try {
-      const { printerIP, port = defaultPrinterPort, htmlContent, jobLabel = "cycle_report", copies = 1 } =
+      const { printerIP, port = 9100, htmlContent, jobLabel = "cycle_report", copies = 1 } =
         req.body || {};
 
       console.log(`📍 Printer IP: ${printerIP}:${port}`);
@@ -1193,7 +1188,7 @@ function registerPrinterRoutes(app) {
     }
   });
 
-  app.use("/receipts", express.static(path.join(__dirname, "..", "receipts")));
+  app.use("/receipts", express.static(path.join(__dirname, "receipts")));
 
   app.get("/api/print/status", (req, res) => {
     res.json({
