@@ -973,10 +973,105 @@ async function printHtmlBlock(printer, htmlContent, jobLabel = "report", copies 
   };
 }
 
+async function printSampleSlip(
+  printer,
+  { title = "SAMPLE PRINT", message = "Printer connection successful", copies = 1 } = {}
+) {
+  const sanitizedCopies = Math.max(1, Math.min(10, parseInt(copies, 10) || 1));
+  const referenceCode = `sample_${Date.now()}`;
+  const lines = String(message || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let i = 0; i < sanitizedCopies; i += 1) {
+    printer.alignCenter();
+    printer.println(String(title || "SAMPLE PRINT"));
+    printer.println("--------------------------------");
+    printer.alignLeft();
+    printer.println(`Ref: ${referenceCode}-${i + 1}`);
+    printer.println(`Time: ${new Date().toLocaleString()}`);
+    printer.println("");
+    if (lines.length > 0) {
+      lines.forEach((line) => printer.println(line));
+    } else {
+      printer.println("Printer connection successful");
+    }
+    printer.println("");
+    printer.alignCenter();
+    printer.println("END OF SAMPLE");
+    printer.cut();
+    await printer.execute();
+    printer.clear();
+  }
+
+  return {
+    referenceCode,
+    copiesPrinted: sanitizedCopies,
+  };
+}
+
 // ============================================
 // API ROUTES WITH DETAILED LOGGING
 // ============================================
 function registerPrinterRoutes(app) {
+  app.post("/api/print/sample/:ip", async (req, res) => {
+    const requestStart = Date.now();
+    console.log(`\n🔷 NEW SAMPLE PRINT REQUEST: ${new Date().toISOString()}`);
+
+    try {
+      const printerIP = req.params.ip;
+      const port = req.query.port || 9100;
+      const { title, message, copies = 1 } = req.body || {};
+
+      console.log(`📍 Printer IP: ${printerIP}:${port}`);
+      console.log(`🧾 Sample copies: ${copies}`);
+
+      if (!printerIP || typeof printerIP !== "string") {
+        return res.status(400).json({
+          success: false,
+          message: "Printer IP is required",
+        });
+      }
+
+      const printer = createPrinterByIP(printerIP, port);
+
+      try {
+        const connected = await printer.isPrinterConnected();
+        if (connected === false) {
+          throw new Error(`Printer not reachable at ${printerIP}:${port}`);
+        }
+      } catch (connectError) {
+        throw new Error(connectError.message || "Failed to verify printer connectivity");
+      }
+
+      const result = await printSampleSlip(printer, { title, message, copies });
+      const totalRequestTime = Date.now() - requestStart;
+      console.log(`✅ Sample print request completed in ${totalRequestTime}ms\n`);
+
+      return res.json({
+        success: true,
+        message: "Sample print sent to printer",
+        printerIP,
+        port,
+        totalRequestTimeMs: totalRequestTime,
+        ...result,
+      });
+    } catch (error) {
+      const totalRequestTime = Date.now() - requestStart;
+      console.error(
+        `❌ Sample print failed after ${totalRequestTime}ms:`,
+        error.message
+      );
+
+      return res.status(500).json({
+        success: false,
+        message: error.message || "Failed to print sample",
+        totalRequestTimeMs: totalRequestTime,
+      });
+    }
+  });
+
   app.post("/api/print/ip/:ip", async (req, res) => {
     const requestStart = Date.now();
     console.log(`\n🔷 NEW PRINT REQUEST: ${new Date().toISOString()}`);
