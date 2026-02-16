@@ -122,6 +122,9 @@ server = app.listen(printerServerPort, "0.0.0.0", () => {
   console.log(
     "  POST /api/print/difference-report/:date?scope=today|total&printer=IP - Print diff report"
   );
+  console.log(
+    "  POST /api/print/difference-by-person/:date?mode=individual|common&printer=IP - Print person diff report"
+  );
   console.log("  GET  /api/print/status - Print status");
 });
 
