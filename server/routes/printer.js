@@ -16,15 +16,38 @@ let usedCodes = new Set();
 let codeCounter = 1;
 const DEFAULT_SLICE_HEIGHT_PX = 1200;
 const RECEIPTS_DIR = path.join(__dirname, "..", "receipts");
+const RECEIPT_BUCKETS = {
+  SHOP: "shop",
+  GODDOWN: "goddown",
+  STOCKLENS: "stocklens",
+};
 const PUPPETEER_LAUNCH_TIMEOUT_MS = Number.parseInt(
   process.env.PUPPETEER_LAUNCH_TIMEOUT_MS || "60000",
   10
 );
+const PUPPETEER_DUMPIO =
+  String(process.env.PUPPETEER_DUMPIO || "false").toLowerCase() === "true";
 
 const ensureDirExists = (dirPath) => {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
   }
+};
+
+const sanitizeReceiptBucket = (value, fallback = RECEIPT_BUCKETS.SHOP) => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "");
+  return normalized || fallback;
+};
+
+const getReceiptsBucketDir = (bucketName) => {
+  const safeBucket = sanitizeReceiptBucket(bucketName, RECEIPT_BUCKETS.SHOP);
+  return {
+    bucket: safeBucket,
+    dir: path.join(RECEIPTS_DIR, safeBucket),
+  };
 };
 
 const PRINT_LOG_HEADER =
@@ -82,6 +105,76 @@ const logPrintPayload = (appId, payload, meta) => {
 // ============================================
 let browserInstance = null;
 let browserInitPromise = null;
+const DEFAULT_CHROME_PATH_CANDIDATES = [
+  process.env.PUPPETEER_EXECUTABLE_PATH,
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/chromium",
+];
+
+function isExecutableFile(filePath) {
+  if (!filePath || typeof filePath !== "string") return false;
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function getLaunchArgs() {
+  if (process.platform === "linux") {
+    return [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
+      "--no-first-run",
+      "--no-zygote",
+      "--disable-gpu",
+    ];
+  }
+  return ["--disable-gpu"];
+}
+
+function getExecutableCandidates() {
+  const candidates = [...DEFAULT_CHROME_PATH_CANDIDATES];
+  try {
+    const bundledPath = puppeteer.executablePath();
+    if (bundledPath) {
+      candidates.unshift(bundledPath);
+    }
+  } catch (error) {
+    // no-op
+  }
+
+  const seen = new Set();
+  const resolved = [];
+  candidates.forEach((entry) => {
+    const normalized = String(entry || "").trim();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    if (isExecutableFile(normalized)) {
+      resolved.push(normalized);
+    }
+  });
+
+  return resolved;
+}
+
+function formatLaunchError(error) {
+  if (!error) return "Unknown launch error";
+  const parts = [];
+  if (error.message) parts.push(error.message);
+  if (error.cause?.message) parts.push(`cause=${error.cause.message}`);
+  if (error.stack) parts.push(`stack=${error.stack.split("\n").slice(0, 6).join(" | ")}`);
+  return parts.join(" | ");
+}
 
 async function getBrowserInstance() {
   if (browserInstance && browserInstance.isConnected()) {
@@ -94,38 +187,54 @@ async function getBrowserInstance() {
 
   browserInitPromise = (async () => {
     let lastError;
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const executableCandidates = getExecutableCandidates();
+    const launchTargets =
+      executableCandidates.length > 0
+        ? executableCandidates.map((executablePath) => ({ executablePath }))
+        : [{}];
+
+    console.log(
+      `🧭 [browser] Launch targets: ${
+        launchTargets.map((target) => target.executablePath || "puppeteer-default").join(", ")
+      }`
+    );
+
+    let attempt = 1;
+    for (const target of launchTargets) {
       try {
         const browser = await puppeteer.launch({
           headless: true,
           timeout: Number.isFinite(PUPPETEER_LAUNCH_TIMEOUT_MS)
             ? PUPPETEER_LAUNCH_TIMEOUT_MS
             : 60000,
-          args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-accelerated-2d-canvas",
-            "--no-first-run",
-            "--no-zygote",
-            "--disable-gpu",
-          ],
+          dumpio: PUPPETEER_DUMPIO,
+          args: getLaunchArgs(),
+          ...(target.executablePath
+            ? { executablePath: target.executablePath }
+            : {}),
         });
         browserInstance = browser;
         browser.on("disconnected", () => {
           browserInstance = null;
         });
-        console.log(`✅ Browser instance initialized (attempt ${attempt})`);
+        console.log(
+          `✅ Browser instance initialized (attempt ${attempt})${
+            target.executablePath
+              ? ` using ${target.executablePath}`
+              : " using puppeteer default"
+          }`
+        );
         return browser;
       } catch (error) {
         lastError = error;
         console.error(
-          `⚠️ Browser launch attempt ${attempt} failed: ${error.message}`
+          `⚠️ Browser launch attempt ${attempt} failed${
+            target.executablePath ? ` [${target.executablePath}]` : ""
+          }: ${formatLaunchError(error)}`
         );
-        if (attempt < 2) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
       }
+      attempt += 1;
     }
 
     browserInstance = null;
@@ -741,7 +850,13 @@ async function generateGoddownReceiptHTML(printData, includeQR = true) {
 // ============================================
 // OPTIMIZED: HTML to Image (Reuses Browser)
 // ============================================
-async function htmlToImageAndSave(html, uniqueCode, suffix = "", perf) {
+async function htmlToImageAndSave(
+  html,
+  uniqueCode,
+  suffix = "",
+  perf,
+  receiptBucket = RECEIPT_BUCKETS.SHOP
+) {
   const browser = await getBrowserInstance();
   perf?.log(`Browser ready${suffix}`);
   
@@ -766,14 +881,15 @@ async function htmlToImageAndSave(html, uniqueCode, suffix = "", perf) {
       deviceScaleFactor: 2,
     });
 
-    ensureDirExists(RECEIPTS_DIR);
+    const bucketInfo = getReceiptsBucketDir(receiptBucket);
+    ensureDirExists(bucketInfo.dir);
 
     const htmlPath = path.join(
-      RECEIPTS_DIR,
+      bucketInfo.dir,
       `receipt_${uniqueCode}${suffix}.html`
     );
     const imagePath = path.join(
-      RECEIPTS_DIR,
+      bucketInfo.dir,
       `receipt_${uniqueCode}${suffix}.png`
     );
 
@@ -895,8 +1011,20 @@ async function printReceiptWithHTML(printer, printData) {
 
     // Convert to images in parallel
     const [resultWithQR, resultWithoutQR] = await Promise.all([
-      htmlToImageAndSave(htmlWithQR, uniqueCode, "_with_qr", perf),
-      htmlToImageAndSave(htmlWithoutQR, uniqueCode, "_no_qr", perf)
+      htmlToImageAndSave(
+        htmlWithQR,
+        uniqueCode,
+        "_with_qr",
+        perf,
+        RECEIPT_BUCKETS.SHOP
+      ),
+      htmlToImageAndSave(
+        htmlWithoutQR,
+        uniqueCode,
+        "_no_qr",
+        perf,
+        RECEIPT_BUCKETS.SHOP
+      )
     ]);
     perf.log("Both images created");
 
@@ -948,12 +1076,12 @@ async function printReceiptWithHTML(printer, printData) {
         withQR: {
           htmlPath: resultWithQR.htmlPath,
           imagePath: resultWithQR.imagePath,
-          viewPath: `/receipts/receipt_${uniqueCode}_with_qr.html`,
+          viewPath: `/receipts/${RECEIPT_BUCKETS.SHOP}/receipt_${uniqueCode}_with_qr.html`,
         },
         withoutQR: {
           htmlPath: resultWithoutQR.htmlPath,
           imagePath: resultWithoutQR.imagePath,
-          viewPath: `/receipts/receipt_${uniqueCode}_no_qr.html`,
+          viewPath: `/receipts/${RECEIPT_BUCKETS.SHOP}/receipt_${uniqueCode}_no_qr.html`,
         },
       },
     };
@@ -981,7 +1109,8 @@ async function printGoddownReceiptWithHTML(printer, printData) {
       htmlWithQR,
       uniqueCode,
       "_with_qr",
-      perf
+      perf,
+      RECEIPT_BUCKETS.GODDOWN
     );
     perf.log("Image created");
 
@@ -1017,7 +1146,7 @@ async function printGoddownReceiptWithHTML(printer, printData) {
         withQR: {
           htmlPath: resultWithQR.htmlPath,
           imagePath: resultWithQR.imagePath,
-          viewPath: `/receipts/receipt_${uniqueCode}_with_qr.html`,
+          viewPath: `/receipts/${RECEIPT_BUCKETS.GODDOWN}/receipt_${uniqueCode}_with_qr.html`,
         },
       },
     };
@@ -1041,7 +1170,13 @@ async function printHtmlBlock(printer, htmlContent, jobLabel = "report", copies 
   const perf = new PerformanceLogger(uniqueCode);
   perf.log("HTML print job received");
   
-  const renderResult = await htmlToImageAndSave(htmlContent, uniqueCode, "_custom", perf);
+  const renderResult = await htmlToImageAndSave(
+    htmlContent,
+    uniqueCode,
+    "_custom",
+    perf,
+    RECEIPT_BUCKETS.STOCKLENS
+  );
   perf.log("HTML render complete");
 
   if (!renderResult.success) {
@@ -1480,6 +1615,9 @@ function registerPrinterRoutes(app) {
   });
 
   ensureDirExists(RECEIPTS_DIR);
+  ensureDirExists(getReceiptsBucketDir(RECEIPT_BUCKETS.SHOP).dir);
+  ensureDirExists(getReceiptsBucketDir(RECEIPT_BUCKETS.GODDOWN).dir);
+  ensureDirExists(getReceiptsBucketDir(RECEIPT_BUCKETS.STOCKLENS).dir);
   app.use("/receipts", express.static(RECEIPTS_DIR));
 
   app.get("/api/print/status", (req, res) => {

@@ -122,6 +122,16 @@ function isOptionalPasswordValid(password) {
   return normalized === adminPassword || normalized === SUPER_ADMIN_PASSWORD;
 }
 
+function isAdminPasswordValid(password) {
+  const normalized =
+    typeof password === "string" ? password.trim() : String(password || "").trim();
+  if (!normalized) {
+    return false;
+  }
+  const adminPassword = readAdminPassword();
+  return normalized === adminPassword || normalized === SUPER_ADMIN_PASSWORD;
+}
+
 class HttpError extends Error {
   constructor(statusCode, message) {
     super(message);
@@ -373,6 +383,11 @@ function hasOperatorUnfinishedOnDate(product, targetDate, operatorName) {
   const unfinishedChangeLog = parseUnfinishedData(
     product.UnfinishedChangeLog || "[]"
   );
+  let latestOperator = "";
+  let latestTimestamp = Number.NEGATIVE_INFINITY;
+  let latestSequence = -1;
+  let sequence = 0;
+
   for (const container of unfinishedChangeLog) {
     const containerDate = extractDateFromTimestamp(container?.date);
     const data =
@@ -385,16 +400,32 @@ function hasOperatorUnfinishedOnDate(product, targetDate, operatorName) {
       ? container.logs
       : [];
     for (const entry of logs) {
+      const currentSequence = sequence;
+      sequence += 1;
       const entryDate = extractDateFromTimestamp(
         entry?.date || entry?.time || containerDate
       );
       if (entryDate !== targetDate) continue;
       const entryOperator = resolveOperatorFromLog(entry);
-      if (entryOperator && entryOperator === normalizedOperator) return true;
+      if (!entryOperator) continue;
+      const rawTimestamp = entry?.time || entry?.date || container?.date || "";
+      const parsedTimestamp = rawTimestamp ? Date.parse(rawTimestamp) : NaN;
+      const comparableTimestamp = Number.isFinite(parsedTimestamp)
+        ? parsedTimestamp
+        : Number.NEGATIVE_INFINITY;
+      if (
+        comparableTimestamp > latestTimestamp ||
+        (comparableTimestamp === latestTimestamp &&
+          currentSequence > latestSequence)
+      ) {
+        latestTimestamp = comparableTimestamp;
+        latestSequence = currentSequence;
+        latestOperator = entryOperator;
+      }
     }
   }
 
-  return false;
+  return Boolean(latestOperator) && latestOperator === normalizedOperator;
 }
 
 function hasLocationActivityOnDate(product, targetDate, locationType) {
@@ -553,11 +584,18 @@ function updateUnfinishedForDate(unfinishedArray, date, data) {
   return unfinishedArray;
 }
 
-function collectUnfinishedProductsForDate(data, todayDate) {
+function collectUnfinishedProductsForDate(data, todayDate, operatorName = "") {
   const unfinishedProducts = [];
+  const normalizedOperator = normalizeOperatorName(operatorName);
 
   data.forEach((row) => {
     if (!row.Brand || !row.Pack) return;
+    if (
+      normalizedOperator &&
+      !hasOperatorUnfinishedOnDate(row, todayDate, normalizedOperator)
+    ) {
+      return;
+    }
 
     const unfinishedShopArray = parseUnfinishedData(row.UnfinishedShop || "[]");
     const unfinishedGodownArray = parseUnfinishedData(
@@ -642,10 +680,17 @@ function collectUnfinishedProductsForDate(data, todayDate) {
   return unfinishedProducts;
 }
 
-function getScannedCountsByLocation(data, todayDate) {
+function getScannedCountsByLocation(data, todayDate, operatorName = "") {
   const counts = { shop: 0, godown: 0 };
+  const normalizedOperator = normalizeOperatorName(operatorName);
   if (!Array.isArray(data)) return counts;
   data.forEach((row) => {
+    if (
+      normalizedOperator &&
+      !hasOperatorUnfinishedOnDate(row, todayDate, normalizedOperator)
+    ) {
+      return;
+    }
     if (hasLocationActivityOnDate(row, todayDate, "shop")) {
       counts.shop += 1;
     }
@@ -3412,6 +3457,16 @@ function registerCycleRoutes(app) {
     try {
       const cycleDate = req.params.date;
       const todayDate = getTodayDateString();
+      const operatorName = extractOperatorName(req);
+      const normalizedOperatorName = normalizeOperatorName(operatorName);
+      if (!normalizedOperatorName || normalizedOperatorName === "unknown") {
+        return res.status(400).json({
+          success: false,
+          message:
+            "operatorName is required. Pass ?operatorName=<name> or x-operator-name header.",
+        });
+      }
+      const operatorFilter = operatorName;
 
       const filePath = getCycleFilePath(cycleDate);
       if (!fs.existsSync(filePath)) {
@@ -3426,14 +3481,20 @@ function registerCycleRoutes(app) {
 
       const unfinishedProducts = collectUnfinishedProductsForDate(
         data,
-        todayDate
+        todayDate,
+        operatorFilter
       );
-      const scannedCounts = getScannedCountsByLocation(data, todayDate);
+      const scannedCounts = getScannedCountsByLocation(
+        data,
+        todayDate,
+        operatorFilter
+      );
 
       res.json({
         success: true,
         cycleDate: cycleDate,
         todayDate: todayDate,
+        operatorName: operatorFilter,
         count: unfinishedProducts.length,
         scannedCounts,
         products: unfinishedProducts,
@@ -6643,6 +6704,142 @@ function registerCycleRoutes(app) {
     }
   });
 
+  app.post("/api/print/difference-report/:date", async (req, res) => {
+    try {
+      const cycleDate = req.params.date;
+      const printerIP = String(req.query.printer || req.body?.printerIP || "")
+        .trim();
+      const scopeRaw = String(req.query.scope || req.body?.scope || "today")
+        .trim()
+        .toLowerCase();
+      const previewMode = ["true", "1", "yes"].includes(
+        String(req.query.preview || req.body?.preview || "")
+          .trim()
+          .toLowerCase()
+      );
+      const password = req.body?.password;
+
+      if (!isAdminPasswordValid(password)) {
+        return res.status(401).json({
+          success: false,
+          message: "Invalid password",
+        });
+      }
+
+      if (!printerIP && !previewMode) {
+        return res.status(400).json({
+          success: false,
+          message: "Printer IP is required",
+        });
+      }
+
+      const scope = scopeRaw === "total" ? "total" : scopeRaw === "today" ? "today" : "";
+      if (!scope) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid scope. Use today or total",
+        });
+      }
+
+      const filePath = getCycleFilePath(cycleDate);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+          success: false,
+          message: `No data found for cycle date: ${cycleDate}`,
+        });
+      }
+
+      const csvData = await parseCycleCsv(filePath);
+      const cycleProducts = csvData.data || [];
+      const masterData = await loadMasterData();
+      const masterProducts = masterData?.data || [];
+      const todayDate = getTodayDateString();
+
+      const masterMap = new Map();
+      masterProducts.forEach((product) => {
+        const key = createProductKey(product.Brand, product.Pack);
+        if (!key) return;
+        masterMap.set(key, product);
+      });
+
+      const differenceSections = buildDifferenceSections({
+        cycleProducts,
+        masterMap,
+        scope,
+        todayDate,
+      });
+
+      const html = generateDifferenceReportHTML({
+        cycleDate,
+        scope,
+        todayDate,
+        sections: differenceSections,
+      });
+
+      if (previewMode) {
+        return res.json({
+          success: true,
+          cycleDate,
+          scope,
+          todayDate,
+          sections: {
+            shop: {
+              count: differenceSections.shop.items.length,
+              totalDiff: differenceSections.shop.totalDiff,
+            },
+            godown: {
+              count: differenceSections.godown.items.length,
+              totalDiff: differenceSections.godown.totalDiff,
+            },
+          },
+          html,
+        });
+      }
+
+      const printRequestStart = Date.now();
+      console.log(`\n🔷 NEW DIFFERENCE PRINT: ${new Date().toISOString()}`);
+      console.log(
+        `📍 Printer IP: ${printerIP} | Scope: ${scope.toUpperCase()} | Cycle: ${cycleDate}`
+      );
+
+      const { createPrinterByIP, printHtmlBlock } = require("./printer");
+      const printer = createPrinterByIP(printerIP);
+      const printResult = await printHtmlBlock(
+        printer,
+        html,
+        `difference_${scope}`,
+        1
+      );
+      const printRequestTime = Date.now() - printRequestStart;
+      console.log(`✅ Difference print time: ${printRequestTime}ms\n`);
+
+      res.json({
+        success: true,
+        message: `Difference report (${scope}) printed successfully`,
+        cycleDate,
+        scope,
+        todayDate,
+        sections: {
+          shop: {
+            count: differenceSections.shop.items.length,
+            totalDiff: differenceSections.shop.totalDiff,
+          },
+          godown: {
+            count: differenceSections.godown.items.length,
+            totalDiff: differenceSections.godown.totalDiff,
+          },
+        },
+        ...printResult,
+      });
+    } catch (error) {
+      console.error("Error generating difference report:", error);
+      res.status(500).json({
+        success: false,
+        message: error.message || "Failed to generate difference report",
+      });
+    }
+  });
+
   startBrandsMonitor();
 }
 
@@ -7287,6 +7484,228 @@ function generateVerificationFilterReportHTML(data) {
   `
     )
     .join("")}
+
+  <div class="center" style="font-size: 11px; margin-top: 3px;">
+    Generated: ${new Date().toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+    })}
+  </div>
+</body>
+</html>
+  `;
+}
+
+function buildDifferenceSections({ cycleProducts, masterMap, scope, todayDate }) {
+  const sections = {
+    shop: { title: "SHOP", items: [], totalDiff: 0 },
+    godown: { title: "GODOWN", items: [], totalDiff: 0 },
+  };
+
+  const formatPackLabel = (packValue) => {
+    const trimmed = String(packValue || "").trim();
+    if (!trimmed) return "";
+    if (/[a-zA-Z]/.test(trimmed)) return trimmed;
+    return `${trimmed}ml`;
+  };
+
+  const formatSignedDiff = (diffValue) => {
+    const numeric = Number(diffValue) || 0;
+    if (numeric === 0) return "0";
+    return numeric > 0 ? `+${numeric}` : `${numeric}`;
+  };
+
+  const shouldIncludeLocationForRow = (row, locationType) => {
+    if (scope === "total") return true;
+    return hasLocationActivityOnDate(row, todayDate, locationType);
+  };
+
+  (cycleProducts || []).forEach((row) => {
+    if (!row || !row.Brand || !row.Pack) return;
+
+    const key = createProductKey(row.Brand, row.Pack);
+    const masterProduct = key && masterMap ? masterMap.get(key) : null;
+    const bpc = parseInt(row.BPC || masterProduct?.BPC || "12", 10) || 12;
+    const name = `${row.Brand} ${formatPackLabel(row.Pack)}`.trim();
+
+    const collectForLocation = (locationType) => {
+      if (!shouldIncludeLocationForRow(row, locationType)) {
+        return;
+      }
+
+      const field = locationType === "shop" ? "Shop" : "Godown";
+      const scannedCount = parseCountValue(
+        row[field] || row[field.toLowerCase()] || "0",
+        bpc
+      );
+      const masterCount = parseCountValue(
+        masterProduct?.[field] || masterProduct?.[field.toLowerCase()] || "0",
+        bpc
+      );
+      const diff = scannedCount.total - masterCount.total;
+      if (diff === 0) return;
+
+      sections[locationType].items.push({
+        name,
+        master: masterCount.formatted,
+        scanned: scannedCount.formatted,
+        diff,
+        diffLabel: formatSignedDiff(diff),
+      });
+      sections[locationType].totalDiff += diff;
+    };
+
+    collectForLocation("shop");
+    collectForLocation("godown");
+  });
+
+  const sortItems = (items) =>
+    items.sort((a, b) => {
+      const magnitudeDiff = Math.abs(b.diff) - Math.abs(a.diff);
+      if (magnitudeDiff !== 0) return magnitudeDiff;
+      return (a.name || "").localeCompare(b.name || "");
+    });
+
+  sortItems(sections.shop.items);
+  sortItems(sections.godown.items);
+
+  return sections;
+}
+
+function generateDifferenceReportHTML(data) {
+  const { cycleDate, scope, todayDate, sections } = data;
+  const scopeLabel = scope === "total" ? "TOTAL DIFF" : "TODAY DIFF";
+  const scopeInfo =
+    scope === "total"
+      ? `All cycle items (${cycleDate})`
+      : `Only scanned today (${todayDate})`;
+
+  const renderSection = (section) => {
+    const items = Array.isArray(section?.items) ? section.items : [];
+    if (items.length === 0) {
+      return `
+        <div style="font-size: 13px; font-weight: 900; margin: 3px 0; display: flex; justify-content: space-between;">
+          <span>${section.title}</span>
+          <span>0</span>
+        </div>
+        <div style="font-size: 12px; margin: 4px 0;">No diff items</div>
+        <div class="separator"></div>
+      `;
+    }
+
+    return `
+      <div style="font-size: 13px; font-weight: 900; margin: 3px 0; display: flex; justify-content: space-between;">
+        <span>${section.title}</span>
+        <span>Items: ${items.length} | Total: ${
+      section.totalDiff > 0
+        ? `+${section.totalDiff}`
+        : section.totalDiff
+    }</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 46%;">Name</th>
+            <th style="width: 18%;">Master</th>
+            <th style="width: 18%;">Scanned</th>
+            <th style="width: 18%;">Diff</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items
+            .map(
+              (item) => `
+            <tr>
+              <td>${item.name}</td>
+              <td>${item.master}</td>
+              <td>${item.scanned}</td>
+              <td>${item.diffLabel}</td>
+            </tr>
+          `
+            )
+            .join("")}
+        </tbody>
+      </table>
+      <div class="separator"></div>
+    `;
+  };
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Difference Report - ${cycleDate}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-weight: bold;
+      color: black;
+    }
+    body {
+      font-family: 'Roboto Condensed', sans-serif;
+      font-size: 13px;
+      line-height: 1.1;
+      padding: 6px;
+      max-width: 296px;
+      background: white;
+    }
+    .center { text-align: center; }
+    .header-line {
+      display: flex;
+      justify-content: space-between;
+      margin: 3px 0;
+      font-size: 13px;
+    }
+    .separator {
+      border-bottom: 2px solid #000;
+      margin: 3px 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      margin: 3px 0;
+      table-layout: fixed;
+    }
+    th {
+      padding: 2px 1px;
+      text-align: left;
+      border-bottom: 1px solid #000;
+      font-size: 12px;
+    }
+    td {
+      padding: 1px 1px;
+      text-align: left;
+      border: none;
+      word-wrap: break-word;
+      word-break: break-word;
+      white-space: normal;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div class="center">
+    <div style="font-weight: 900; font-size: 16px;">DIFFERENCE REPORT</div>
+    <div>CYCLE-${cycleDate}</div>
+  </div>
+
+  <div class="separator"></div>
+
+  <div class="header-line">
+    <span>Type: ${scopeLabel}</span>
+  </div>
+  <div class="header-line">
+    <span>${scopeInfo}</span>
+  </div>
+
+  <div class="separator"></div>
+
+  ${renderSection(sections.shop)}
+  ${renderSection(sections.godown)}
 
   <div class="center" style="font-size: 11px; margin-top: 3px;">
     Generated: ${new Date().toLocaleString("en-IN", {

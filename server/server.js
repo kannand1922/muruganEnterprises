@@ -119,6 +119,9 @@ server = app.listen(printerServerPort, "0.0.0.0", () => {
   console.log("  POST /api/print/ip-goddown/:ip - Print receipt (Goddown QR)");
   console.log("  GET  /api/print/sample/:ip - Print sample slip");
   console.log("  POST /api/print/html - Print custom HTML report");
+  console.log(
+    "  POST /api/print/difference-report/:date?scope=today|total&printer=IP - Print diff report"
+  );
   console.log("  GET  /api/print/status - Print status");
 });
 
