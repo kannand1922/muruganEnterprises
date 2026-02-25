@@ -3,15 +3,36 @@ const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
 const { printerServerPort } = require("../shared/config/ports");
-const { stockLensPaths, adminPasswordFile } = require("./path/path");
+const {
+  stockLensPaths,
+  stockLensScannerConfigPaths,
+} = require("./path/path");
 
-const registerCycleRoutes = require("./routes/cycle");
-const registerPrinterRoutes = require("./routes/printer");
+if (!process.env.DATABASE_URL) {
+  const defaultSqlitePath = path.join(stockLensPaths.dataDir, "stocklens_prisma.sqlite");
+  process.env.DATABASE_URL = `file:${defaultSqlitePath}`;
+}
+
+const { prisma } = require("./server-scanner/src/prisma");
+const registerPrinterRoutes = require("./server-printer/registerPrinterRoutes");
+const newCyclesRouter = require("./server-scanner/src/routes/cycles");
+const newStockRouter = require("./server-scanner/src/routes/stock");
+const newMetaRouter = require("./server-scanner/src/routes/meta");
 
 const app = express();
 
 let server;
 let isShuttingDown = false;
+
+const REQUIRED_BUILD_FILE = path.resolve(stockLensScannerConfigPaths.requiredBuildFile);
+
+const closePrisma = async () => {
+  try {
+    await prisma.$disconnect();
+  } catch (error) {
+    console.warn(`⚠️ Prisma disconnect failed: ${error.message}`);
+  }
+};
 
 const shutdown = (reason, exitCode = 0) => {
   if (isShuttingDown) {
@@ -22,14 +43,15 @@ const shutdown = (reason, exitCode = 0) => {
     console.error(`Shutting down (${reason})...`);
   }
   if (server) {
-    server.close(() => {
+    server.close(async () => {
+      await closePrisma();
       process.exit(exitCode);
     });
     setTimeout(() => {
       process.exit(exitCode);
     }, 10_000).unref();
   } else {
-    process.exit(exitCode);
+    closePrisma().finally(() => process.exit(exitCode));
   }
 };
 
@@ -49,36 +71,39 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
 const brandsCsvPath = stockLensPaths.brandsCsv;
-const adminPasswordPath = adminPasswordFile;
 
-const readAdminConfigValue = (key) => {
+const readRequiredBuildNumber = () => {
   try {
-    const raw = fs.readFileSync(adminPasswordPath, "utf8");
-    const lines = raw.split(/\r?\n/).map((line) => line.trim());
-    for (const line of lines) {
-      if (!line || line.startsWith("#")) continue;
-      const [k, ...rest] = line.split("=");
-      if (!k || rest.length === 0) continue;
-      if (k.trim().toLowerCase() === key.toLowerCase()) {
-        return rest.join("=").trim();
-      }
-    }
-    return "";
+    const raw = fs.readFileSync(REQUIRED_BUILD_FILE, "utf8");
+    const value = String(raw || "").trim();
+    return value || "1";
   } catch (error) {
     console.warn(
-      `⚠️ Unable to read admin config (${adminPasswordPath}): ${error.message}`
+      `⚠️ Unable to read required build config (${REQUIRED_BUILD_FILE}): ${error.message}`
     );
-    return "";
+    return "1";
   }
 };
 
-const readRequiredBuildNumber = () => {
-  const required = readAdminConfigValue("required_build");
-  return required || "1";
-};
-
-registerCycleRoutes(app);
 registerPrinterRoutes(app);
+
+app.get("/new/health", async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ ok: true, db: "connected" });
+  } catch (error) {
+    res.status(500).json({ ok: false, db: "error", error: error.message });
+  }
+});
+
+app.get("/new/api/app/version", (req, res) => {
+  const requiredBuild = readRequiredBuildNumber();
+  res.json({ success: true, requiredBuild });
+});
+
+app.use("/new/api/cycles", newCyclesRouter);
+app.use("/new/api/stock", newStockRouter);
+app.use("/new/api/meta", newMetaRouter);
 
 app.get("/api/app/version", (req, res) => {
   const requiredBuild = readRequiredBuildNumber();
@@ -102,19 +127,15 @@ server = app.listen(printerServerPort, "0.0.0.0", () => {
   );
   logBrandsCsvModifiedTime();
   console.log("Available endpoints:");
+  console.log("  GET  /new/health - New StockLens health");
+  console.log("  GET  /new/api/app/version - New StockLens build requirement");
+  console.log("  GET  /new/api/meta/* - New StockLens metadata");
+  console.log("  GET  /new/api/stock/* - New StockLens stock routes");
+  console.log("  GET  /new/api/cycles/* - New StockLens cycle routes");
   console.log("  GET  /api/products - List products");
   console.log("  GET  /api/allprinters - List printers");
   console.log("  GET  /api/brands - List brands");
   console.log("  GET  /api/app/version - App build requirement");
-  console.log("  POST /api/cycle/:date/product - Add/Update product");
-  console.log("  DELETE /api/cycle/:date/product - Delete product");
-  console.log("  GET  /api/cycle/:date - Get cycle CSV data");
-  console.log("  GET  /api/cycle/:date/match?brand=X&pack=Y - Match product");
-  console.log("  GET  /api/cycle/:date/product?brand=X&pack=Y - Get product details");
-  console.log("  POST /api/cycle/start - Start a cycle");
-  console.log("  POST /api/cycle/stop - Stop a cycle");
-  console.log("  GET  /api/cycle/current - Get active cycle");
-  console.log("  GET  /api/cycle/all - List cycles");
   console.log("  POST /api/print/ip/:ip - Print receipt");
   console.log("  POST /api/print/ip-goddown/:ip - Print receipt (Goddown QR)");
   console.log("  GET  /api/print/sample/:ip - Print sample slip");

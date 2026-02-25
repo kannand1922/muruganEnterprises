@@ -4,7 +4,7 @@ const fs = require("fs");
 const QRCode = require("qrcode");
 const puppeteer = require("puppeteer");
 const { PNG } = require("pngjs");
-const { printLogPaths } = require("../path/path");
+const { printLogPaths, receiptPaths } = require("../path/path");
 const {
   ThermalPrinter,
   PrinterTypes,
@@ -15,7 +15,7 @@ const { markPrinted } = require("../pool/codePool");
 let usedCodes = new Set();
 let codeCounter = 1;
 const DEFAULT_SLICE_HEIGHT_PX = 1200;
-const RECEIPTS_DIR = path.join(__dirname, "..", "receipts");
+const RECEIPTS_DIR = receiptPaths.dataDir;
 const RECEIPT_BUCKETS = {
   SHOP: "shop",
   GODDOWN: "goddown",

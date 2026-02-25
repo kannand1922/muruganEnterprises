@@ -1,0 +1,247 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model ShopInfo {
+  id           Int      @id
+  shopCode     String   @unique @map("shop_code")
+  shopName     String   @map("shop_name")
+  areaName     String?  @map("area_name")
+  city         String?
+  state        String?
+  pincode      String?
+  addressLine1 String?  @map("address_line1")
+  addressLine2 String?  @map("address_line2")
+  nilLocation  Int?     @map("nil_location")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  nilLocationRef ShopLocation? @relation(fields: [nilLocation], references: [id], onDelete: SetNull)
+
+  @@map("shop_info")
+}
+
+model ShopLocation {
+  id           Int      @id @default(autoincrement())
+  locationCode String   @unique @map("location_code")
+  locationName String   @map("location_name")
+  locationType String?  @map("location_type")
+  locationColor String  @default("#2563eb") @map("location_color")
+  sortOrder    Int      @default(0) @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  unfinishedStocks CycleUnfinishedStock[]
+  finishedStocks   CycleFinishedStock[]
+  events           CycleProductEvent[]
+  nilForShop       ShopInfo[]
+
+  @@map("shop_locations")
+}
+
+model Cycle {
+  id        Int      @id @default(autoincrement())
+  sno       Int?
+  startDate DateTime @unique @map("start_date")
+  endDate   DateTime? @map("end_date")
+  status    String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  unfinishedStocks CycleUnfinishedStock[]
+  finishedStocks   CycleFinishedStock[]
+  events           CycleProductEvent[]
+
+  @@index([status, startDate], map: "idx_cycles_status_start_date")
+  @@map("cycles")
+}
+
+model CycleUnfinishedStock {
+  id                    Int      @id @default(autoincrement())
+  cycleId               Int      @map("cycle_id")
+  itemCode              String   @map("item_code")
+  itemName              String?  @map("item_name")
+  brandName             String?  @map("brand_name")
+  packValue             String?  @map("pack_value")
+  bpc                   Int?
+  mrp                   Float?
+  barcode               String?
+  phoneId               Int?     @map("phone_id")
+  phoneName             String?  @map("phone_name")
+  shopLocationId        Int      @map("shop_location_id")
+  activityDate          DateTime @map("activity_date")
+  quantityBottles       Int      @default(0) @map("quantity_bottles")
+  isMatched             Boolean  @default(false) @map("is_matched")
+  currentStockBottles   Int      @default(0) @map("current_stock_bottles")
+  diffBottles           Int      @default(0) @map("diff_bottles")
+  recheckShown          Boolean  @default(false) @map("recheck_shown")
+  lastUpdatedByWorkerId Int?     @map("last_updated_by_worker_id")
+  stateUpdatedAt        DateTime @default(now()) @map("state_updated_at")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  cycle         Cycle         @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  shopLocation  ShopLocation  @relation(fields: [shopLocationId], references: [id], onDelete: Restrict)
+  lastUpdatedBy Worker?       @relation("UnfinishedUpdatedBy", fields: [lastUpdatedByWorkerId], references: [id], onDelete: SetNull)
+  phone         Phone?        @relation("UnfinishedPhone", fields: [phoneId], references: [id], onDelete: SetNull)
+  events        CycleProductEvent[] @relation("UnfinishedEvents")
+  finishedRefs  CycleFinishedStock[] @relation("SourceUnfinished")
+
+  @@unique([cycleId, itemCode, shopLocationId, activityDate], map: "uniq_cycle_unfinished_stock")
+  @@index([cycleId, itemCode, shopLocationId, activityDate], map: "idx_cycle_unfinished_lookup")
+  @@map("cycle_unfinished_stock")
+}
+
+model CycleFinishedStock {
+  id                    Int      @id @default(autoincrement())
+  cycleId               Int      @map("cycle_id")
+  itemCode              String   @map("item_code")
+  itemName              String?  @map("item_name")
+  brandName             String?  @map("brand_name")
+  packValue             String?  @map("pack_value")
+  bpc                   Int?
+  mrp                   Float?
+  barcode               String?
+  phoneId               Int?      @map("phone_id")
+  phoneName             String?  @map("phone_name")
+  shopLocationId        Int      @map("shop_location_id")
+  activityDate          DateTime @map("activity_date")
+  quantityBottles       Int      @default(0) @map("quantity_bottles")
+  isMatched             Boolean  @default(false) @map("is_matched")
+  matchedAt             DateTime? @map("matched_at")
+  lastUpdatedByWorkerId Int?      @map("last_updated_by_worker_id")
+  finishedAt            DateTime  @default(now()) @map("finished_at")
+  finishedByWorkerId    Int?      @map("finished_by_worker_id")
+  sourceUnfinishedId    Int?      @map("source_unfinished_id")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  cycle            Cycle               @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  shopLocation     ShopLocation        @relation(fields: [shopLocationId], references: [id], onDelete: Restrict)
+  lastUpdatedBy    Worker?             @relation("FinishedUpdatedBy", fields: [lastUpdatedByWorkerId], references: [id], onDelete: SetNull)
+  phone            Phone?              @relation("FinishedPhone", fields: [phoneId], references: [id], onDelete: SetNull)
+  finishedBy       Worker?             @relation("FinishedBy", fields: [finishedByWorkerId], references: [id], onDelete: SetNull)
+  sourceUnfinished CycleUnfinishedStock? @relation("SourceUnfinished", fields: [sourceUnfinishedId], references: [id], onDelete: SetNull)
+  events           CycleProductEvent[] @relation("FinishedEvents")
+
+  @@unique([cycleId, itemCode, shopLocationId, activityDate], map: "uniq_cycle_finished_stock")
+  @@index([cycleId, itemCode, shopLocationId, activityDate], map: "idx_cycle_finished_lookup")
+  @@map("cycle_finished_stock")
+}
+
+model CycleProductEvent {
+  id                 Int      @id @default(autoincrement())
+  cycleId            Int      @map("cycle_id")
+  itemCode           String   @map("item_code")
+  itemName           String?  @map("item_name")
+  brandName          String?  @map("brand_name")
+  packValue          String?  @map("pack_value")
+  shopLocationId     Int      @map("shop_location_id")
+  cycleUnfinishedId  Int?     @map("cycle_unfinished_id")
+  cycleFinishedId    Int?     @map("cycle_finished_id")
+  activityDate       DateTime @map("activity_date")
+  eventTime          DateTime @default(now()) @map("event_time")
+  eventScope         String   @map("event_scope")
+  eventAction        String   @map("event_action")
+  matched            Boolean?
+  stockBottlesAfter  Int?     @map("stock_bottles_after")
+  currentStockBottles Int?    @map("current_stock_bottles")
+  diffBottles        Int?     @map("diff_bottles")
+  changesJson        String?  @map("changes_json")
+  workerId           Int?     @map("worker_id")
+  deviceId           Int?     @map("device_id")
+  phoneId           Int?      @map("phone_id")
+  shopName           String?  @map("shop_name")
+  phoneName          String?  @map("phone_name")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  cycle            Cycle               @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  shopLocation     ShopLocation        @relation(fields: [shopLocationId], references: [id], onDelete: Restrict)
+  unfinished       CycleUnfinishedStock? @relation("UnfinishedEvents", fields: [cycleUnfinishedId], references: [id], onDelete: SetNull)
+  finished         CycleFinishedStock?   @relation("FinishedEvents", fields: [cycleFinishedId], references: [id], onDelete: SetNull)
+  worker           Worker?             @relation(fields: [workerId], references: [id], onDelete: SetNull)
+  device           Device?             @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  phone            Phone?              @relation(fields: [phoneId], references: [id], onDelete: SetNull)
+
+  @@index([cycleId, itemCode, shopLocationId, eventTime], map: "idx_cycle_product_events_lookup")
+  @@map("cycle_product_events")
+}
+
+model Worker {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  phone     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  unfinishedUpdatedRows CycleUnfinishedStock[] @relation("UnfinishedUpdatedBy")
+  finishedUpdatedRows   CycleFinishedStock[]   @relation("FinishedUpdatedBy")
+  finishedByRows        CycleFinishedStock[]   @relation("FinishedBy")
+  events                CycleProductEvent[]
+
+  @@map("workers")
+}
+
+model Device {
+  id        Int      @id @default(autoincrement())
+  uuid      String   @unique
+  model     String?
+  platform  String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  events CycleProductEvent[]
+
+  @@map("devices")
+}
+
+model Phone {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  unfinishedRows CycleUnfinishedStock[] @relation("UnfinishedPhone")
+  finishedRows   CycleFinishedStock[]   @relation("FinishedPhone")
+  events         CycleProductEvent[]
+
+  @@map("phones")
+}
+
+model BestSellingProduct {
+  id        Int      @id @default(autoincrement())
+  itemCode  String   @unique @map("item_code")
+  itemName  String?  @map("item_name")
+  brandName String?  @map("brand_name")
+  packValue String?  @map("pack_value")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("best_selling_products")
+}
+
+model AppSetting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}
+
+model Printer {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  ipAddress String   @unique @map("ip_address")
+  port      Int      @default(9100)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("printers")
+}

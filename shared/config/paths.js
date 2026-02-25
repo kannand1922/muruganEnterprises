@@ -4,29 +4,26 @@ const SHARED_ROOT = path.join(__dirname, "..");
 const DATA_ROOT = path.join(SHARED_ROOT, "data");
 const CONFIG_DIR = path.join(SHARED_ROOT, "config");
 const LOGS_DIR = path.join(DATA_ROOT, "logs");
+const RECEIPTS_DIR = path.join(DATA_ROOT, "receipts");
 const CODE_POOL_DIR = path.join(DATA_ROOT, "codePools");
-const MY_APP_DIR = path.join(DATA_ROOT, "scanner");
 const STOCK_LENS_DIR = path.join(DATA_ROOT, "stock");
-const STOCK_LENS_CYCLES_DIR = path.join(STOCK_LENS_DIR, "cycles");
 
-const adminPasswordFile = path.join(CONFIG_DIR, "admin-password.txt");
-
-const myAppPaths = {
-  dataDir: MY_APP_DIR,
-  productsCsv: path.join(MY_APP_DIR, "products.csv"),
-  printersCsv: path.join(MY_APP_DIR, "printers.csv"),
-  brandsCsv: "M://STOCK.csv",
-};
+const STOCK_LENS_SETTINGS_PASSWORD_FILE = path.join(
+  CONFIG_DIR,
+  "settings-password.txt"
+);
+const STOCK_LENS_REQUIRED_BUILD_FILE = path.join(
+  CONFIG_DIR,
+  "required-build.txt"
+);
+const STOCK_LENS_MASTER_MAX_AGE_FILE = path.join(
+  CONFIG_DIR,
+  "master-max-age-minutes.txt"
+);
 
 const stockLensPaths = {
   dataDir: STOCK_LENS_DIR,
-  cyclesDir: STOCK_LENS_CYCLES_DIR,
-  productsCsv: path.join(STOCK_LENS_DIR, "products.csv"),
-  printersCsv: path.join(STOCK_LENS_DIR, "printers.csv"),
-  brandsCsv: "M://STOCK.csv",
-  cycleManagementCsv: path.join(STOCK_LENS_DIR, "cycle.csv"),
-  bestSellingCsv: path.join(STOCK_LENS_DIR, "bestselling.csv"),
-  workerCsv: path.join(STOCK_LENS_DIR, "worker.csv"),
+  brandsCsv: path.join(STOCK_LENS_DIR, "brands.csv"),
 };
 
 const codePoolPaths = {
@@ -44,17 +41,23 @@ const printLogPaths = {
   goddownPrintLogFile: path.join(LOGS_DIR, "goddown_prints.csv"),
 };
 
-function getCycleFilePath(cycleDate) {
-  return path.join(STOCK_LENS_CYCLES_DIR, `${cycleDate}.csv`);
-}
+const receiptPaths = {
+  dataDir: RECEIPTS_DIR,
+};
+
+const stockLensScannerConfigPaths = {
+  configDir: CONFIG_DIR,
+  settingsPasswordFile: STOCK_LENS_SETTINGS_PASSWORD_FILE,
+  requiredBuildFile: STOCK_LENS_REQUIRED_BUILD_FILE,
+  masterMaxAgeMinutesFile: STOCK_LENS_MASTER_MAX_AGE_FILE,
+};
 
 module.exports = {
   dataRoot: DATA_ROOT,
   configDir: CONFIG_DIR,
-  adminPasswordFile,
-  myAppPaths,
   stockLensPaths,
-  getCycleFilePath,
   codePoolPaths,
   printLogPaths,
+  receiptPaths,
+  stockLensScannerConfigPaths,
 };
