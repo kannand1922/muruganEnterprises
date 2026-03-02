@@ -23,7 +23,7 @@ const STOCK_LENS_MASTER_MAX_AGE_FILE = path.join(
 
 const stockLensPaths = {
   dataDir: STOCK_LENS_DIR,
-  brandsCsv: path.join(STOCK_LENS_DIR, "brands.csv"),
+  brandsCsv: "M://STOCK.csv",
 };
 
 const codePoolPaths = {
