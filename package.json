@@ -16,5 +16,9 @@
     "build:stockLens": "npm --prefix stockLens run build",
     "lint:cycle": "npm --prefix Cycle run lint",
     "lint:stockLens": "npm --prefix stockLens run lint"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.1.0",
+    "@capacitor/cli": "^8.1.0"
   }
 }

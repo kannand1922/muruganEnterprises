@@ -11,7 +11,17 @@ stockLens/
 myApp/
 
 
+stocklens_prisma.sqlite/
 server/receipts/
+
+
+# .gitignore
+shared/data/stock/*.sqlite
+shared/data/stock/*.sqlite-*
+server/server-scanner/prisma/*.db
+server/server-scanner/prisma/*.sqlite
+server/server-scanner/prisma/*.db-*
+server/server-scanner/prisma/*.sqlite-*
 
 
 # logs / temp

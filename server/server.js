@@ -9,7 +9,10 @@ const {
 } = require("./path/path");
 
 if (!process.env.DATABASE_URL) {
-  const defaultSqlitePath = path.join(stockLensPaths.dataDir, "stocklens_prisma.sqlite");
+  const defaultSqlitePath = path.join(
+    stockLensPaths.dbDir || stockLensPaths.dataDir,
+    "stocklens_prisma.sqlite"
+  );
   process.env.DATABASE_URL = `file:${defaultSqlitePath}`;
 }
 

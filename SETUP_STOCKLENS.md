@@ -39,18 +39,7 @@ npm install
 
 ### Scanner backend env
 
-```bash
-cd ../server/server-scanner
-cp .env.example .env
-```
-
-Verify `server/server-scanner/.env`:
-
-```env
-DATABASE_URL="file:../../shared/data/stock/stocklens_prisma.sqlite"
-PORT=3100
-PRINTER_SERVICE_URL="http://localhost:3100"
-```
+No scanner `.env` setup is required for database configuration now. The scanner database path is hardcoded in `server/server-scanner/prisma/schema.prisma`.
 
 ### Frontend env
 
@@ -177,3 +166,15 @@ npx prisma migrate reset
 - ensure `stocklens-new/.env` has `VITE_API_BASE_URL=http://localhost:3100/new/api`
 - clear app local storage backend override if set
 
+
+
+
+cd /Users/apple/Documents/project/stocklens-new
+
+npm install -D @capacitor/cli @capacitor/android
+npm install
+
+npm run build
+npx cap add android
+npx cap sync android
+npx cap open android
