@@ -401,7 +401,7 @@ const LogsTab = ({ allCycles, loading, onRefresh }) => {
     setSelectedProductKey(null);
 
     try {
-      const response = await cycleAPI.getCycleData(cycle.startDate);
+      const response = await cycleAPI.getCycleData(cycle.startDate, cycle.cycleId);
       if (!response.success) {
         setCycleDataError(response.message || "Unable to load cycle data.");
         return;
@@ -664,7 +664,9 @@ const LogsTab = ({ allCycles, loading, onRefresh }) => {
       }
 
       const responses = await Promise.all(
-        filteredCycles.map((cycle) => cycleAPI.getCycleData(cycle.startDate))
+        filteredCycles.map((cycle) =>
+          cycleAPI.getCycleData(cycle.startDate, cycle.cycleId)
+        )
       );
 
       const merged = [];

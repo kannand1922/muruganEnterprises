@@ -3,9 +3,10 @@ import { calculateDuration, formatDate } from "../helpers";
 import { cycleAPI } from "../service/api";
 import { Play, Square, ShieldAlert, LockKeyhole } from "lucide-react";
 
+const LOCATION_STORAGE_KEY = "desktop_selected_location_code";
+
 // Cycle Tab Component
 const CycleTab = ({ currentCycle, onRefresh, showToast }) => {
-    console.log("🚀 ~ CycleTab ~ currentCycle:", currentCycle)
     const [loading, setLoading] = useState(false);
     const [showStopConfirm, setShowStopConfirm] = useState(false);
     const [customEndDate, setCustomEndDate] = useState('');
@@ -24,7 +25,7 @@ const CycleTab = ({ currentCycle, onRefresh, showToast }) => {
       setStopValidation({
         checking: true,
         canStop: false,
-        message: 'Checking shop stock matches…',
+        message: 'Checking stock matches…',
         issues: [],
         totalIssues: 0,
       });
@@ -45,7 +46,7 @@ const CycleTab = ({ currentCycle, onRefresh, showToast }) => {
       const nonScannedIssues = (result?.nonScanned || []).map((item) => ({
         brand: item.brand,
         pack: item.pack,
-        detail: 'Not scanned in shop',
+        detail: 'Not scanned',
       }));
       return [...unmatchedIssues, ...nonScannedIssues];
     };
@@ -65,12 +66,21 @@ const CycleTab = ({ currentCycle, onRefresh, showToast }) => {
       setStopValidation({
         checking: true,
         canStop: false,
-        message: 'Checking shop stock matches…',
+        message: 'Checking stock matches…',
         issues: [],
         totalIssues: 0,
       });
       try {
-        const result = await cycleAPI.compareCycle(currentCycle.startDate, 'shop');
+        const selectedLocation =
+          typeof window !== "undefined"
+            ? window.localStorage.getItem(LOCATION_STORAGE_KEY) || ""
+            : "";
+        const result = await cycleAPI.compareCycle(
+          currentCycle.startDate,
+          selectedLocation,
+          null,
+          currentCycle?.cycleId
+        );
         if (!result.success) {
           throw new Error(result.message || 'Comparison failed');
         }
@@ -80,8 +90,8 @@ const CycleTab = ({ currentCycle, onRefresh, showToast }) => {
           checking: false,
           canStop,
           message: canStop
-            ? 'All shop stocks are matched. You can safely stop the cycle.'
-            : 'Shop stock mismatches detected. Resolve them or use Force Close with admin approval.',
+            ? 'All stocks are matched. You can safely stop the cycle.'
+            : 'Stock mismatches detected. Resolve them or use Force Close with admin approval.',
           issues: issues.slice(0, 5),
           totalIssues: issues.length,
         });

@@ -781,8 +781,8 @@ async function buildDifferenceDataset({ cycleId, dayRange, scope }) {
     const sectionType = getDifferenceLocationType(location);
     const master = masterByCode.get(codeKey) || null;
     const scanned = Number(row.quantityBottles || 0);
-    const current = getMasterStockBottles(master, location);
-    const diff = scanned - current;
+    const currentStockBottles = Number(row.currentStockBottles || 0);
+    const diffBottles = Number(row.diffBottles || 0);
     const updatedAtRaw = row.finishedAt || row.updatedAt || row.createdAt || row.activityDate;
     const updatedAtMs = new Date(updatedAtRaw || 0).getTime();
     const hasTodayActivity =
@@ -809,9 +809,9 @@ async function buildDifferenceDataset({ cycleId, dayRange, scope }) {
         row.itemName || master?.itemName,
         row.itemCode || master?.itemCode
       ),
-      currentStock: Math.trunc(current),
+      currentStock: Math.trunc(currentStockBottles),
       scanned: Math.trunc(scanned),
-      diff: Math.trunc(diff),
+      diff: Math.trunc(diffBottles),
       updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : 0,
       hasTodayActivity,
       workerId:
@@ -1474,6 +1474,8 @@ async function moveUnfinishedToFinished(tx, unfinished, finishedByWorkerId, even
       shopLocationId: unfinished.shopLocationId,
       activityDate: unfinished.activityDate,
       quantityBottles: unfinished.quantityBottles,
+      currentStockBottles: unfinished.currentStockBottles,
+      diffBottles: unfinished.diffBottles,
       isMatched: unfinished.isMatched,
       matchedAt: unfinished.isMatched ? new Date() : null,
       lastUpdatedByWorkerId: unfinished.lastUpdatedByWorkerId,
@@ -1482,6 +1484,8 @@ async function moveUnfinishedToFinished(tx, unfinished, finishedByWorkerId, even
     },
     update: {
       quantityBottles: unfinished.quantityBottles,
+      currentStockBottles: unfinished.currentStockBottles,
+      diffBottles: unfinished.diffBottles,
       isMatched: unfinished.isMatched,
       matchedAt: unfinished.isMatched ? new Date() : null,
       phoneId: unfinished.phoneId,
@@ -1633,8 +1637,8 @@ router.get("/verify/mismatched-finished", async (req, res) => {
       const master = masterByCode.get(String(row.itemCode || "").trim().toLowerCase()) || null;
       const safeBpc = Number(row.bpc || master?.bpc) || 12;
       const enteredBottles = Number(row.quantityBottles || 0);
-      const currentStockBottles = getMasterStockBottles(master, location);
-      const diffBottles = enteredBottles - currentStockBottles;
+      const currentStockBottles = Number(row.currentStockBottles || 0);
+      const diffBottles = Number(row.diffBottles || 0);
 
       return {
         id: row.id,

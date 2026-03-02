@@ -14,9 +14,9 @@ import {
   List,
 } from 'lucide-react';
 import { cycleAPI } from '../service/api';
-import { ANALYSIS_PASSWORD } from '../config/constants';
 
 const COUNTS_UNLOCK_STORAGE_KEY = 'cycle.analysis.countsUnlocked';
+const LOCATION_STORAGE_KEY = 'desktop_selected_location_code';
 const LOCKED_PLACEHOLDER = 'Locked';
 
 const deriveLocationFromChanges = (changes, fallback) => {
@@ -198,7 +198,8 @@ const filterEntriesByRange = (entries, range) => {
 const AnalysisTab = () => {
   const [cycles, setCycles] = useState([]);
   const [selectedCycle, setSelectedCycle] = useState(null);
-  const [location, setLocation] = useState('shop');
+  const [locationOptions, setLocationOptions] = useState([]);
+  const [location, setLocation] = useState('');
   const [analysisDate, setAnalysisDate] = useState('');
   const [comparisonData, setComparisonData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -224,6 +225,7 @@ const AnalysisTab = () => {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState('');
+  const [passwordSubmitting, setPasswordSubmitting] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -267,11 +269,26 @@ const AnalysisTab = () => {
     return `${cases}C + ${bottles}B`;
   };
 
-  useEffect(() => {
-    fetchCycles();
-  }, []);
+  const resolvePreferredLocationCode = (rows, defaultLocationCode) => {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return '';
+    }
 
-  const fetchCycles = async () => {
+    const validCodes = new Set(rows.map((row) => row.locationCode));
+    const storedCode =
+      typeof window !== 'undefined'
+        ? window.localStorage.getItem(LOCATION_STORAGE_KEY)
+        : '';
+    if (storedCode && validCodes.has(storedCode)) {
+      return storedCode;
+    }
+    if (defaultLocationCode && validCodes.has(defaultLocationCode)) {
+      return defaultLocationCode;
+    }
+    return rows[0].locationCode;
+  };
+
+  const fetchCycles = async (locationCode) => {
     try {
       const data = await cycleAPI.getAllCycles();
       if (data.success) {
@@ -285,7 +302,14 @@ const AnalysisTab = () => {
           const defaultDate = getDefaultAnalysisDate(initialCycle);
           setSelectedCycle(initialCycle);
           setAnalysisDate(defaultDate);
-          fetchComparisonData(initialCycle.startDate, location, defaultDate);
+          if (locationCode) {
+            fetchComparisonData(
+              initialCycle.startDate,
+              locationCode,
+              defaultDate,
+              initialCycle.cycleId
+            );
+          }
         }
       } else {
         setError(data.message || 'Failed to fetch cycles');
@@ -296,13 +320,50 @@ const AnalysisTab = () => {
     }
   };
 
-  const fetchComparisonData = async (cycleDate, loc, dateFilter) => {
+  useEffect(() => {
+    const initialize = async () => {
+      try {
+        const result = await cycleAPI.getLocations();
+        if (!result?.success) {
+          setError(result?.message || 'Failed to fetch locations');
+          return;
+        }
+
+        const rows = Array.isArray(result.rows) ? result.rows : [];
+        setLocationOptions(rows);
+        if (rows.length === 0) {
+          setError('No shop locations configured');
+        }
+
+        const locationCode = resolvePreferredLocationCode(rows, result.defaultLocationCode);
+        setLocation(locationCode);
+
+        if (typeof window !== 'undefined' && locationCode) {
+          window.localStorage.setItem(LOCATION_STORAGE_KEY, locationCode);
+        }
+
+        await fetchCycles(locationCode);
+      } catch (err) {
+        setError('Failed to initialize analysis data');
+        console.error(err);
+      }
+    };
+
+    initialize();
+  }, []);
+
+  const fetchComparisonData = async (cycleDate, loc, dateFilter, cycleId) => {
+    if (!loc) {
+      setError('No shop locations configured');
+      setComparisonData(null);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       const effectiveDate = dateFilter !== undefined ? dateFilter : analysisDate;
       const normalizedDate = effectiveDate && effectiveDate !== '' ? effectiveDate : null;
-      const data = await cycleAPI.compareCycle(cycleDate, loc, normalizedDate);
+      const data = await cycleAPI.compareCycle(cycleDate, loc, normalizedDate, cycleId);
       if (data.success) {
         setComparisonData(data);
       } else {
@@ -316,14 +377,14 @@ const AnalysisTab = () => {
     }
   };
 
-  const fetchBestSellingData = async (cycleDate, loc, dateFilter) => {
-    if (!cycleDate) return;
+  const fetchBestSellingData = async (cycleDate, loc, dateFilter, cycleId) => {
+    if (!cycleDate || !loc) return;
     setBestSellingLoading(true);
     setBestSellingError(null);
     try {
       const effectiveDate = dateFilter !== undefined ? dateFilter : analysisDate;
       const normalizedDate = effectiveDate && effectiveDate !== '' ? effectiveDate : null;
-      const data = await cycleAPI.getBestSelling(cycleDate, loc, normalizedDate);
+      const data = await cycleAPI.getBestSelling(cycleDate, loc, normalizedDate, cycleId);
       if (data.success) {
         setBestSellingData(data);
       } else {
@@ -339,12 +400,12 @@ const AnalysisTab = () => {
     }
   };
 
-  const fetchActivityData = async (cycleDate) => {
+  const fetchActivityData = async (cycleDate, cycleId) => {
     if (!cycleDate) return;
     setActivityLoading(true);
     setActivityError(null);
     try {
-      const response = await cycleAPI.getCycleData(cycleDate);
+      const response = await cycleAPI.getCycleData(cycleDate, cycleId);
       if (!response.success) {
         throw new Error(response.message || 'Failed to fetch activity data');
       }
@@ -377,24 +438,39 @@ const AnalysisTab = () => {
     setShowModal(false);
     const nextAnalysisDate = getDefaultAnalysisDate(cycle);
     setAnalysisDate(nextAnalysisDate);
-    fetchComparisonData(cycle.startDate, location, nextAnalysisDate);
+    if (location) {
+      fetchComparisonData(cycle.startDate, location, nextAnalysisDate, cycle.cycleId);
+    }
     setBestSellingData(null);
     if (analysisMode === 'bestselling') {
-      fetchBestSellingData(cycle.startDate, location, nextAnalysisDate);
+      fetchBestSellingData(cycle.startDate, location, nextAnalysisDate, cycle.cycleId);
     }
     const nextActivityEnd = getCycleMaxDate(cycle);
     setActivityRange({ start: cycle.startDate || '', end: nextActivityEnd });
     if (analysisMode === 'activity') {
-      fetchActivityData(cycle.startDate);
+      fetchActivityData(cycle.startDate, cycle.cycleId);
     }
   };
 
   const handleLocationChange = (newLocation) => {
     setLocation(newLocation);
+    if (typeof window !== 'undefined' && newLocation) {
+      window.localStorage.setItem(LOCATION_STORAGE_KEY, newLocation);
+    }
     if (selectedCycle) {
-      fetchComparisonData(selectedCycle.startDate, newLocation, analysisDate);
+      fetchComparisonData(
+        selectedCycle.startDate,
+        newLocation,
+        analysisDate,
+        selectedCycle.cycleId
+      );
       if (analysisMode === 'bestselling') {
-        fetchBestSellingData(selectedCycle.startDate, newLocation, analysisDate);
+        fetchBestSellingData(
+          selectedCycle.startDate,
+          newLocation,
+          analysisDate,
+          selectedCycle.cycleId
+        );
       }
     }
   };
@@ -403,17 +479,27 @@ const AnalysisTab = () => {
     if (!selectedCycle) return;
     if (!value) {
       setAnalysisDate('');
-      fetchComparisonData(selectedCycle.startDate, location, null);
+      fetchComparisonData(selectedCycle.startDate, location, null, selectedCycle.cycleId);
       if (analysisMode === 'bestselling') {
-        fetchBestSellingData(selectedCycle.startDate, location, null);
+        fetchBestSellingData(selectedCycle.startDate, location, null, selectedCycle.cycleId);
       }
       return;
     }
     const clampedValue = clampAnalysisDateToCycle(selectedCycle, value);
     setAnalysisDate(clampedValue);
-    fetchComparisonData(selectedCycle.startDate, location, clampedValue);
+    fetchComparisonData(
+      selectedCycle.startDate,
+      location,
+      clampedValue,
+      selectedCycle.cycleId
+    );
     if (analysisMode === 'bestselling') {
-      fetchBestSellingData(selectedCycle.startDate, location, clampedValue);
+      fetchBestSellingData(
+        selectedCycle.startDate,
+        location,
+        clampedValue,
+        selectedCycle.cycleId
+      );
     }
   };
 
@@ -425,10 +511,15 @@ const AnalysisTab = () => {
     }
     if (mode === 'bestselling' && selectedCycle) {
       setBestSellingFilter('all');
-      fetchBestSellingData(selectedCycle.startDate, location, analysisDate);
+      fetchBestSellingData(
+        selectedCycle.startDate,
+        location,
+        analysisDate,
+        selectedCycle.cycleId
+      );
     }
     if (mode === 'activity' && selectedCycle) {
-      fetchActivityData(selectedCycle.startDate);
+      fetchActivityData(selectedCycle.startDate, selectedCycle.cycleId);
     }
     if (mode !== 'activity') {
       setActivityBrandQuery('');
@@ -441,16 +532,7 @@ const AnalysisTab = () => {
     setBestSellingFilter(filter);
   };
 
-  const isPasswordConfigured =
-    typeof ANALYSIS_PASSWORD === 'string' && ANALYSIS_PASSWORD.trim().length > 0;
-
   const handleUnlockRequest = () => {
-    if (!isPasswordConfigured) {
-      setCountsUnlocked(true);
-      setPasswordInput('');
-      setPasswordError('');
-      return;
-    }
     setPasswordInput('');
     setPasswordError('');
     setShowPasswordModal(true);
@@ -462,25 +544,32 @@ const AnalysisTab = () => {
     setPasswordError('');
   };
 
-  const handlePasswordSubmit = (event) => {
+  const handlePasswordSubmit = async (event) => {
     event.preventDefault();
     const trimmedInput = passwordInput.trim();
 
-    if (!isPasswordConfigured) {
-      setCountsUnlocked(true);
-      setShowPasswordModal(false);
-      setPasswordInput('');
-      setPasswordError('');
+    if (!trimmedInput) {
+      setPasswordError('Password is required.');
       return;
     }
 
-    if (trimmedInput === ANALYSIS_PASSWORD.trim()) {
-      setCountsUnlocked(true);
-      setShowPasswordModal(false);
-      setPasswordInput('');
-      setPasswordError('');
-    } else {
-      setPasswordError('Incorrect password. Please try again.');
+    setPasswordSubmitting(true);
+    setPasswordError('');
+
+    try {
+      const response = await cycleAPI.verifySettingsPassword(trimmedInput);
+      if (response?.success) {
+        setCountsUnlocked(true);
+        setShowPasswordModal(false);
+        setPasswordInput('');
+        setPasswordError('');
+      } else {
+        setPasswordError(response?.message || 'Incorrect password. Please try again.');
+      }
+    } catch (error) {
+      setPasswordError('Failed to verify password. Try again.');
+    } finally {
+      setPasswordSubmitting(false);
     }
   };
 
@@ -583,7 +672,7 @@ const AnalysisTab = () => {
 
   useEffect(() => {
     if (!selectedCycle || analysisMode !== 'activity') return;
-    fetchActivityData(selectedCycle.startDate);
+    fetchActivityData(selectedCycle.startDate, selectedCycle.cycleId);
   }, [analysisMode, selectedCycle]);
 
   const baseActivityEntries = useMemo(
@@ -596,6 +685,16 @@ const AnalysisTab = () => {
     baseActivityEntries.forEach((entry) => {
       if (entry.operatorName) {
         names.add(entry.operatorName);
+      }
+    });
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [baseActivityEntries]);
+
+  const locationFilterOptions = useMemo(() => {
+    const names = new Set();
+    baseActivityEntries.forEach((entry) => {
+      if (entry.location) {
+        names.add(entry.location);
       }
     });
     return Array.from(names).sort((a, b) => a.localeCompare(b));
@@ -857,6 +956,7 @@ const AnalysisTab = () => {
               className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               value={passwordInput}
               onChange={(event) => setPasswordInput(event.target.value)}
+              disabled={passwordSubmitting}
               autoFocus
             />
             {passwordError && (
@@ -867,15 +967,17 @@ const AnalysisTab = () => {
             <button
               type="button"
               onClick={handlePasswordModalClose}
+              disabled={passwordSubmitting}
               className="px-4 py-2 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
+              disabled={passwordSubmitting}
               className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
             >
-              Unlock
+              {passwordSubmitting ? 'Verifying...' : 'Unlock'}
             </button>
           </div>
         </form>
@@ -959,27 +1061,24 @@ const AnalysisTab = () => {
             </div>
             {analysisMode !== 'activity' ? (
               <>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleLocationChange('shop')}
-                    className={`px-4 py-2 rounded-lg font-medium transition-all ${
-                      location === 'shop'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
+                <div className="flex items-center gap-2 text-sm text-gray-600 bg-gray-100 px-3 py-2 rounded-lg">
+                  <span className="font-medium text-gray-700">Location</span>
+                  <select
+                    value={location}
+                    onChange={(event) => handleLocationChange(event.target.value)}
+                    disabled={locationOptions.length === 0}
+                    className="bg-white border border-gray-200 rounded-md px-2 py-1 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:text-gray-400"
                   >
-                    Shop
-                  </button>
-                  <button
-                    onClick={() => handleLocationChange('godown')}
-                    className={`px-4 py-2 rounded-lg font-medium transition-all ${
-                      location === 'godown'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
-                  >
-                    Godown
-                  </button>
+                    {locationOptions.length === 0 ? (
+                      <option value="">No shop locations configured</option>
+                    ) : (
+                      locationOptions.map((option) => (
+                        <option key={option.id} value={option.locationCode}>
+                          {option.locationName} ({option.locationCode})
+                        </option>
+                      ))
+                    )}
+                  </select>
                 </div>
                 <div className="flex items-center gap-2 text-sm text-gray-600 bg-gray-100 px-3 py-2 rounded-lg">
                   <span className="font-medium text-gray-700">Analysis Date</span>
@@ -1066,8 +1165,11 @@ const AnalysisTab = () => {
                     className="bg-white border border-gray-200 rounded-md px-2 py-1 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   >
                     <option value="">All</option>
-                    <option value="Shop">Shop</option>
-                    <option value="Godown">Godown</option>
+                    {locationFilterOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>

@@ -3,14 +3,12 @@ import { Eye, Printer as PrinterIcon, RefreshCw } from 'lucide-react';
 import { cycleAPI } from '../service/api';
 import { formatDate } from '../helpers';
 
-const LOCATION_OPTIONS = [
-  { id: 'shop', label: 'Shop' },
-  { id: 'godown', label: 'Godown' },
-];
+const LOCATION_STORAGE_KEY = 'desktop_selected_location_code';
 
 const PrinterTab = ({ allCycles, onRefresh, showToast }) => {
   const [selectedCycle, setSelectedCycle] = useState(null);
-  const [location, setLocation] = useState('shop');
+  const [locationOptions, setLocationOptions] = useState([]);
+  const [location, setLocation] = useState('');
   const [printers, setPrinters] = useState([]);
   const [selectedPrinter, setSelectedPrinter] = useState('');
   const [printing, setPrinting] = useState(false);
@@ -45,6 +43,47 @@ const PrinterTab = ({ allCycles, onRefresh, showToast }) => {
   }, [orderedCycles]);
 
   useEffect(() => {
+    const loadLocations = async () => {
+      try {
+        const result = await cycleAPI.getLocations();
+        if (!result?.success) {
+          showToast?.(result?.message || 'Unable to load shop locations', 'error');
+          return;
+        }
+
+        const rows = Array.isArray(result.rows) ? result.rows : [];
+        setLocationOptions(rows);
+
+        if (rows.length === 0) {
+          setLocation('');
+          return;
+        }
+
+        const validCodes = new Set(rows.map((row) => row.locationCode));
+        const storedCode =
+          typeof window !== 'undefined'
+            ? window.localStorage.getItem(LOCATION_STORAGE_KEY)
+            : '';
+        const resolvedCode =
+          (storedCode && validCodes.has(storedCode) && storedCode) ||
+          (result.defaultLocationCode && validCodes.has(result.defaultLocationCode)
+            ? result.defaultLocationCode
+            : rows[0].locationCode);
+
+        setLocation(resolvedCode);
+        if (typeof window !== 'undefined' && resolvedCode) {
+          window.localStorage.setItem(LOCATION_STORAGE_KEY, resolvedCode);
+        }
+      } catch (error) {
+        console.error('Failed to load locations', error);
+        showToast?.('Unable to load shop locations', 'error');
+      }
+    };
+
+    loadLocations();
+  }, [showToast]);
+
+  useEffect(() => {
     const loadPrinters = async () => {
       try {
         const result = await cycleAPI.getPrinters();
@@ -64,7 +103,7 @@ const PrinterTab = ({ allCycles, onRefresh, showToast }) => {
 
   const cycleDate = selectedCycle?.startDate || '';
   const locationLabel =
-    LOCATION_OPTIONS.find((option) => option.id === location)?.label || 'Shop';
+    locationOptions.find((option) => option.locationCode === location)?.locationName || '—';
 
   const loadPreview = useCallback(async () => {
     if (!cycleDate) {
@@ -79,6 +118,7 @@ const PrinterTab = ({ allCycles, onRefresh, showToast }) => {
       const response = await cycleAPI.previewVerificationReport({
         cycleDate,
         location,
+        cycleId: selectedCycle?.cycleId,
       });
       if (!response?.success) {
         throw new Error(response?.message || 'Unable to load preview');
@@ -91,7 +131,7 @@ const PrinterTab = ({ allCycles, onRefresh, showToast }) => {
     } finally {
       setPreviewLoading(false);
     }
-  }, [cycleDate, location]);
+  }, [cycleDate, location, selectedCycle?.cycleId]);
 
   useEffect(() => {
     if (previewOpen) {
@@ -108,6 +148,10 @@ const PrinterTab = ({ allCycles, onRefresh, showToast }) => {
       showToast?.('Select a printer before printing', 'warning');
       return;
     }
+    if (!location) {
+      showToast?.('Select a location before printing', 'warning');
+      return;
+    }
 
     setPrinting(true);
     try {
@@ -115,6 +159,7 @@ const PrinterTab = ({ allCycles, onRefresh, showToast }) => {
         cycleDate,
         location,
         printerIP: selectedPrinter,
+        cycleId: selectedCycle?.cycleId,
       });
       if (!response?.success) {
         throw new Error(response?.message || 'Print failed');
@@ -153,9 +198,9 @@ const PrinterTab = ({ allCycles, onRefresh, showToast }) => {
             </button>
             <button
               onClick={() => setPreviewOpen(true)}
-              disabled={!cycleDate}
+              disabled={!cycleDate || !location}
               className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg border ${
-                cycleDate
+                cycleDate && location
                   ? 'border-gray-300 text-gray-700 hover:bg-gray-50'
                   : 'border-gray-200 text-gray-400 cursor-not-allowed'
               }`}
@@ -165,9 +210,9 @@ const PrinterTab = ({ allCycles, onRefresh, showToast }) => {
             </button>
             <button
               onClick={() => setShowPrintModal(true)}
-              disabled={!cycleDate}
+              disabled={!cycleDate || !location}
               className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg text-white ${
-                cycleDate
+                cycleDate && location
                   ? 'bg-blue-600 hover:bg-blue-700'
                   : 'bg-gray-300 cursor-not-allowed'
               }`}
@@ -201,21 +246,28 @@ const PrinterTab = ({ allCycles, onRefresh, showToast }) => {
           </div>
           <div>
             <label className="text-sm font-semibold text-gray-600">Location</label>
-            <div className="flex gap-2 mt-1">
-              {LOCATION_OPTIONS.map((option) => (
-                <button
-                  key={option.id}
-                  onClick={() => setLocation(option.id)}
-                  className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition ${
-                    location === option.id
-                      ? 'border-blue-500 bg-blue-50 text-blue-600'
-                      : 'border-gray-200 text-gray-600 hover:border-blue-200'
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
+            <select
+              value={location}
+              onChange={(event) => {
+                const code = event.target.value;
+                setLocation(code);
+                if (typeof window !== 'undefined' && code) {
+                  window.localStorage.setItem(LOCATION_STORAGE_KEY, code);
+                }
+              }}
+              disabled={locationOptions.length === 0}
+              className="w-full mt-1 rounded-lg border border-gray-200 px-3 py-2 text-gray-800 focus:border-blue-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400"
+            >
+              {locationOptions.length === 0 ? (
+                <option value="">No shop locations configured</option>
+              ) : (
+                locationOptions.map((option) => (
+                  <option key={option.id} value={option.locationCode}>
+                    {option.locationName} ({option.locationCode})
+                  </option>
+                ))
+              )}
+            </select>
           </div>
         </div>
 

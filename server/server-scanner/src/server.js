@@ -8,9 +8,10 @@ const { stockLensScannerConfigPaths } = require("../../../shared/config/paths");
 const cyclesRouter = require("./routes/cycles");
 const stockRouter = require("./routes/stock");
 const metaRouter = require("./routes/meta");
+const desktopRouter = require("./routes/desktop");
 
 const app = express();
-const port = Number(process.env.PORT || 3100);
+const port = Number(process.env.PORT || 3010);
 
 app.use(cors());
 app.use(express.json());
@@ -45,6 +46,7 @@ app.get("/api/app/version", (req, res) => {
 app.use("/api/cycles", cyclesRouter);
 app.use("/api/stock", stockRouter);
 app.use("/api/meta", metaRouter);
+app.use("/desktop", desktopRouter);
 
 app.use((error, req, res, next) => {
   console.error("Unhandled error:", error);

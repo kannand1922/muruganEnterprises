@@ -18,6 +18,7 @@ const registerPrinterRoutes = require("./server-printer/registerPrinterRoutes");
 const newCyclesRouter = require("./server-scanner/src/routes/cycles");
 const newStockRouter = require("./server-scanner/src/routes/stock");
 const newMetaRouter = require("./server-scanner/src/routes/meta");
+const newDesktopRouter = require("./server-scanner/src/routes/desktop");
 
 const app = express();
 
@@ -104,6 +105,7 @@ app.get("/new/api/app/version", (req, res) => {
 app.use("/new/api/cycles", newCyclesRouter);
 app.use("/new/api/stock", newStockRouter);
 app.use("/new/api/meta", newMetaRouter);
+app.use("/new/desktop", newDesktopRouter);
 
 app.get("/api/app/version", (req, res) => {
   const requiredBuild = readRequiredBuildNumber();
@@ -132,6 +134,7 @@ server = app.listen(printerServerPort, "0.0.0.0", () => {
   console.log("  GET  /new/api/meta/* - New StockLens metadata");
   console.log("  GET  /new/api/stock/* - New StockLens stock routes");
   console.log("  GET  /new/api/cycles/* - New StockLens cycle routes");
+  console.log("  GET  /new/desktop/api/* - Desktop compatibility routes");
   console.log("  GET  /api/products - List products");
   console.log("  GET  /api/allprinters - List printers");
   console.log("  GET  /api/brands - List brands");

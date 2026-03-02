@@ -60,7 +60,26 @@ const TabNavigation = ({ activeTab, onTabChange, disabled = false }) => {
 
 // Main App Component
 export default function CycleManagementApp() {
-  const [activeTab, setActiveTab] = useState('cycle');
+  const getTabFromUrl = () => {
+    if (typeof window === 'undefined') return 'cycle';
+    const params = new URLSearchParams(window.location.search);
+    const tab = String(params.get('tab') || '').trim().toLowerCase();
+    return ['cycle', 'analysis', 'logs', 'printer'].includes(tab) ? tab : 'cycle';
+  };
+
+  const setTabInUrl = (tab) => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (tab && tab !== 'cycle') {
+      params.set('tab', tab);
+    } else {
+      params.delete('tab');
+    }
+    const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash || ''}`;
+    window.history.replaceState(null, '', nextUrl);
+  };
+
+  const [activeTab, setActiveTab] = useState(getTabFromUrl);
   const [currentCycle, setCurrentCycle] = useState(null);
   const [allCycles, setAllCycles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -224,6 +243,19 @@ export default function CycleManagementApp() {
     // fetchOperators();
     refreshData();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handlePopState = () => {
+      setActiveTab(getTabFromUrl());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    setTabInUrl(activeTab);
+  }, [activeTab]);
 
   // Check brands status periodically
   // useEffect(() => {
