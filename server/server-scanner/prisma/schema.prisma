@@ -28,19 +28,26 @@ model ShopInfo {
 }
 
 model ShopLocation {
-  id           Int      @id @default(autoincrement())
-  locationCode String   @unique @map("location_code")
-  locationName String   @map("location_name")
-  locationType String?  @map("location_type")
-  locationColor String  @default("#2563eb") @map("location_color")
-  sortOrder    Int      @default(0) @map("sort_order")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id                           Int      @id @default(autoincrement())
+  locationCode                 String   @unique @map("location_code")
+  locationName                 String   @map("location_name")
+  locationType                 String?  @map("location_type")
+  locationColor                String   @default("#2563eb") @map("location_color")
+  sortOrder                    Int      @default(0) @map("sort_order")
+  lowStockNotificationsEnabled Boolean  @default(true) @map("low_stock_notifications_enabled")
+  createdAt                    DateTime @default(now()) @map("created_at")
+  updatedAt                    DateTime @updatedAt @map("updated_at")
 
   unfinishedStocks CycleUnfinishedStock[]
   finishedStocks   CycleFinishedStock[]
   events           CycleProductEvent[]
   nilForShop       ShopInfo[]
+  lowStockConfig   LowStockLocationConfig?
+  lowStockPackRules    LowStockPackRule[]
+  lowStockBrandRules   LowStockBrandRule[]
+  lowStockProductRules LowStockProductRule[]
+  lowStockNotificationRuns LowStockNotificationRun[]
+  fcmDeviceTokens      FcmDeviceToken[]
 
   @@map("shop_locations")
 }
@@ -57,6 +64,7 @@ model Cycle {
   unfinishedStocks CycleUnfinishedStock[]
   finishedStocks   CycleFinishedStock[]
   events           CycleProductEvent[]
+  operatorDailyMismatchSummaries OperatorDailyMismatchSummary[]
 
   @@index([status, startDate], map: "idx_cycles_status_start_date")
   @@map("cycles")
@@ -187,6 +195,7 @@ model Worker {
   finishedUpdatedRows   CycleFinishedStock[]   @relation("FinishedUpdatedBy")
   finishedByRows        CycleFinishedStock[]   @relation("FinishedBy")
   events                CycleProductEvent[]
+  operatorDailyMismatchSummaries OperatorDailyMismatchSummary[]
 
   @@map("workers")
 }
@@ -207,14 +216,135 @@ model Device {
 model Phone {
   id        Int      @id @default(autoincrement())
   name      String   @unique
+  lowStockNotificationsEnabled Boolean @default(true) @map("low_stock_notifications_enabled")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   unfinishedRows CycleUnfinishedStock[] @relation("UnfinishedPhone")
   finishedRows   CycleFinishedStock[]   @relation("FinishedPhone")
   events         CycleProductEvent[]
+  fcmDeviceTokens FcmDeviceToken[]
 
   @@map("phones")
+}
+
+model LowStockLocationConfig {
+  id                      Int      @id @default(autoincrement())
+  shopLocationId          Int      @unique @map("shop_location_id")
+  generalThresholdBottles Int      @default(6) @map("general_threshold_bottles")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@map("low_stock_location_config")
+}
+
+model LowStockPackRule {
+  id               Int      @id @default(autoincrement())
+  shopLocationId   Int      @map("shop_location_id")
+  packValue        String   @map("pack_value")
+  normalizedPack   String   @map("normalized_pack")
+  thresholdBottles Int      @map("threshold_bottles")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@unique([shopLocationId, normalizedPack], map: "uniq_low_stock_pack_rule")
+  @@index([shopLocationId, thresholdBottles], map: "idx_low_stock_pack_rule_lookup")
+  @@map("low_stock_pack_rules")
+}
+
+model LowStockBrandRule {
+  id               Int      @id @default(autoincrement())
+  shopLocationId   Int      @map("shop_location_id")
+  brandName        String   @map("brand_name")
+  normalizedBrand  String   @map("normalized_brand")
+  thresholdBottles Int      @map("threshold_bottles")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@unique([shopLocationId, normalizedBrand], map: "uniq_low_stock_brand_rule")
+  @@index([shopLocationId, thresholdBottles], map: "idx_low_stock_brand_rule_lookup")
+  @@map("low_stock_brand_rules")
+}
+
+model LowStockProductRule {
+  id               Int      @id @default(autoincrement())
+  shopLocationId   Int      @map("shop_location_id")
+  itemCode         String   @map("item_code")
+  normalizedCode   String   @map("normalized_code")
+  thresholdBottles Int      @map("threshold_bottles")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@unique([shopLocationId, normalizedCode], map: "uniq_low_stock_product_rule")
+  @@index([shopLocationId, thresholdBottles], map: "idx_low_stock_product_rule_lookup")
+  @@map("low_stock_product_rules")
+}
+
+model FcmDeviceToken {
+  id             Int      @id @default(autoincrement())
+  token          String   @unique
+  phoneId        Int?     @map("phone_id")
+  shopLocationId Int?     @map("shop_location_id")
+  active         Boolean  @default(true)
+  lastSeenAt     DateTime @default(now()) @map("last_seen_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  phone        Phone?        @relation(fields: [phoneId], references: [id], onDelete: SetNull)
+  shopLocation ShopLocation? @relation(fields: [shopLocationId], references: [id], onDelete: SetNull)
+
+  @@index([shopLocationId, active], map: "idx_fcm_device_tokens_location_active")
+  @@index([phoneId, active], map: "idx_fcm_device_tokens_phone_active")
+  @@map("fcm_device_tokens")
+}
+
+model LowStockNotificationRun {
+  id             Int      @id @default(autoincrement())
+  shopLocationId Int      @map("shop_location_id")
+  csvVersion     String   @map("csv_version")
+  trigger        String?
+  status         String   @default("pending")
+  lowCount       Int      @default(0) @map("low_count")
+  tokenCount     Int      @default(0) @map("token_count")
+  successCount   Int      @default(0) @map("success_count")
+  failureCount   Int      @default(0) @map("failure_count")
+  reason         String?
+  sentAt         DateTime? @map("sent_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@unique([shopLocationId, csvVersion], map: "uniq_low_stock_notification_run")
+  @@index([csvVersion], map: "idx_low_stock_notification_run_version")
+  @@index([shopLocationId, status], map: "idx_low_stock_notification_run_status")
+  @@map("low_stock_notification_runs")
+}
+
+model OperatorDailyMismatchSummary {
+  id            Int      @id @default(autoincrement())
+  cycleId       Int      @map("cycle_id")
+  operatorId    Int      @map("operator_id")
+  activityDate  DateTime @map("activity_date")
+  mismatchCount Int      @default(0) @map("mismatch_count")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  cycle    Cycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  operator Worker @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+
+  @@unique([cycleId, operatorId, activityDate], map: "uniq_operator_daily_mismatch")
+  @@index([activityDate], map: "idx_operator_daily_mismatch_date")
+  @@index([operatorId, activityDate], map: "idx_operator_daily_mismatch_operator_date")
+  @@map("operator_daily_mismatch_summary")
 }
 
 model BestSellingProduct {
@@ -238,12 +368,13 @@ model AppSetting {
 }
 
 model Printer {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  ipAddress String   @unique @map("ip_address")
-  port      Int      @default(9100)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id             Int      @id @default(autoincrement())
+  name           String   @unique
+  ipAddress      String   @unique @map("ip_address")
+  port           Int      @default(9100)
+  defaultPrinter Boolean  @default(false) @map("default_printer")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   @@map("printers")
 }

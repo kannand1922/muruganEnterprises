@@ -9,9 +9,17 @@ const cyclesRouter = require("./routes/cycles");
 const stockRouter = require("./routes/stock");
 const metaRouter = require("./routes/meta");
 const desktopRouter = require("./routes/desktop");
+const myAppCommonRouter = require("./routes/myAppCommon");
+const { startLowStockMonitor, stopLowStockMonitor } = require("./services/lowStockMonitor");
+const {
+  startUnfinishedAutoFinishService,
+  stopUnfinishedAutoFinishService,
+} = require("./services/unfinishedAutoFinish");
 
 const app = express();
 const port = Number(process.env.PORT || 3010);
+let server = null;
+let isShuttingDown = false;
 
 app.use(cors());
 app.use(express.json());
@@ -43,6 +51,7 @@ app.get("/api/app/version", (req, res) => {
   res.json({ success: true, requiredBuild });
 });
 
+app.use("/api", myAppCommonRouter);
 app.use("/api/cycles", cyclesRouter);
 app.use("/api/stock", stockRouter);
 app.use("/api/meta", metaRouter);
@@ -53,18 +62,47 @@ app.use((error, req, res, next) => {
   res.status(500).json({ success: false, message: error.message || "Internal error" });
 });
 
-const server = app.listen(port, () => {
+server = app.listen(port, () => {
   console.log(`Prisma server listening on http://localhost:${port}`);
+  void startLowStockMonitor();
+  void startUnfinishedAutoFinishService();
 });
 
-const shutdown = async () => {
-  server.close(async () => {
-    await prisma.$disconnect();
-    process.exit(0);
-  });
+const shutdown = async (reason = "shutdown", exitCode = 0) => {
+  if (isShuttingDown) {
+    return;
+  }
+  isShuttingDown = true;
+  console.error(`Shutting down scanner server (${reason})...`);
+  stopLowStockMonitor();
+  stopUnfinishedAutoFinishService();
+  if (server) {
+    server.close(async () => {
+      await prisma.$disconnect();
+      process.exit(exitCode);
+    });
+    setTimeout(() => {
+      process.exit(exitCode);
+    }, 10_000).unref();
+    return;
+  }
+  await prisma.$disconnect();
+  process.exit(exitCode);
 };
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => {
+  void shutdown("SIGINT", 0);
+});
+process.on("SIGTERM", () => {
+  void shutdown("SIGTERM", 0);
+});
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught exception:", error);
+  void shutdown("uncaughtException", 1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection:", reason);
+  void shutdown("unhandledRejection", 1);
+});
 
 module.exports = app;

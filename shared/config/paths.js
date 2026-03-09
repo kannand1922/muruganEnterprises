@@ -7,6 +7,7 @@ const LOGS_DIR = path.join(DATA_ROOT, "logs");
 const RECEIPTS_DIR = path.join(DATA_ROOT, "receipts");
 const CODE_POOL_DIR = path.join(DATA_ROOT, "codePools");
 const STOCK_LENS_DIR = path.join(DATA_ROOT, "stock");
+const SCANNER_DATA_DIR = path.join(DATA_ROOT, "scanner");
 
 const STOCK_LENS_SETTINGS_PASSWORD_FILE = path.join(
   CONFIG_DIR,
@@ -23,7 +24,14 @@ const STOCK_LENS_MASTER_MAX_AGE_FILE = path.join(
 
 const stockLensPaths = {
   dataDir: STOCK_LENS_DIR,
-  brandsCsv: "M://STOCK.csv",
+  brandsCsv: path.join(STOCK_LENS_DIR, "brands.csv"),
+};
+
+const scannerDataPaths = {
+  dataDir: SCANNER_DATA_DIR,
+  brandsCsv: path.join(SCANNER_DATA_DIR, "brands.csv"),
+  printersCsv: path.join(SCANNER_DATA_DIR, "printers.csv"),
+  productsCsv: path.join(SCANNER_DATA_DIR, "products.csv"),
 };
 
 const codePoolPaths = {
@@ -56,6 +64,7 @@ module.exports = {
   dataRoot: DATA_ROOT,
   configDir: CONFIG_DIR,
   stockLensPaths,
+  scannerDataPaths,
   codePoolPaths,
   printLogPaths,
   receiptPaths,

@@ -22,6 +22,15 @@ const newCyclesRouter = require("./server-scanner/src/routes/cycles");
 const newStockRouter = require("./server-scanner/src/routes/stock");
 const newMetaRouter = require("./server-scanner/src/routes/meta");
 const newDesktopRouter = require("./server-scanner/src/routes/desktop");
+const myAppCommonRouter = require("./server-scanner/src/routes/myAppCommon");
+const {
+  startLowStockMonitor,
+  stopLowStockMonitor,
+} = require("./server-scanner/src/services/lowStockMonitor");
+const {
+  startUnfinishedAutoFinishService,
+  stopUnfinishedAutoFinishService,
+} = require("./server-scanner/src/services/unfinishedAutoFinish");
 
 const app = express();
 
@@ -46,6 +55,8 @@ const shutdown = (reason, exitCode = 0) => {
   if (reason) {
     console.error(`Shutting down (${reason})...`);
   }
+  stopLowStockMonitor();
+  stopUnfinishedAutoFinishService();
   if (server) {
     server.close(async () => {
       await closePrisma();
@@ -90,6 +101,7 @@ const readRequiredBuildNumber = () => {
 };
 
 registerPrinterRoutes(app);
+app.use("/api", myAppCommonRouter);
 
 app.get("/new/health", async (req, res) => {
   try {
@@ -131,6 +143,8 @@ server = app.listen(printerServerPort, "0.0.0.0", () => {
     `Thermal printer server running on http://localhost:${printerServerPort}`
   );
   logBrandsCsvModifiedTime();
+  void startLowStockMonitor();
+  void startUnfinishedAutoFinishService();
   console.log("Available endpoints:");
   console.log("  GET  /new/health - New StockLens health");
   console.log("  GET  /new/api/app/version - New StockLens build requirement");

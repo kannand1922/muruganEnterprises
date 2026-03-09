@@ -30,3 +30,12 @@ server/server-scanner/prisma/*.sqlite-*
 # IDE
 .vscode/
 .idea/
+
+# Firebase credentials
+server/server-scanner/firebase-service-account.json
+
+
+stocklens_prisma.sqlite
+server/server-scanner/prisma/*.db
+server/server-scanner/prisma/*.sqlite
+server/server-scanner/prisma/*.db-*

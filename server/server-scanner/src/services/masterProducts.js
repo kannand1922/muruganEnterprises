@@ -7,6 +7,7 @@ const { stockLensPaths } = require("../../../../shared/config/paths");
 let cache = {
   mtimeMs: 0,
   rows: [],
+  allRows: [],
 };
 
 function normalizeKey(value) {
@@ -34,6 +35,28 @@ function toNumberOrNull(value) {
   if (value === "" || value === null || value === undefined) return null;
   const num = Number(String(value).replace(/,/g, "").trim());
   return Number.isFinite(num) ? num : null;
+}
+
+function isGodownLike(value) {
+  const normalized = normalizeKey(value);
+  return (
+    normalized.includes("godown") ||
+    normalized.includes("goddown") ||
+    normalized.includes("godwn") ||
+    normalized.includes("warehouse")
+  );
+}
+
+function parseStockStringToBottles(stock, bpc) {
+  const raw = String(stock || "").trim();
+  if (!raw) return 0;
+  const negative = raw.startsWith("-");
+  const unsigned = negative ? raw.slice(1) : raw;
+  const [packsPart = "0", bottlesPart = "0"] = unsigned.split(".");
+  const packs = Math.max(0, Number.parseInt(packsPart, 10) || 0);
+  const bottles = Math.max(0, Number.parseInt(bottlesPart, 10) || 0);
+  const total = packs * Math.max(1, bpc || 1) + bottles;
+  return negative ? -total : total;
 }
 
 function getLocationStockMap(row) {
@@ -116,30 +139,62 @@ function mapMasterRow(row) {
   };
 }
 
-async function loadMasterProducts() {
+function hasPositiveShopStock(masterRow) {
+  const safeBpc = Math.max(1, Number(masterRow?.bpc) || 12);
+  const stocks = masterRow?.locationStocks || {};
+  const nonGodownKeys = Object.keys(stocks).filter((locationKey) => !isGodownLike(locationKey));
+
+  // If CSV has location-specific non-godown columns, trust those for shop availability.
+  // Otherwise, fallback to legacy `shop` column.
+  if (nonGodownKeys.length > 0) {
+    for (const locationKey of nonGodownKeys) {
+      const bottles = parseStockStringToBottles(stocks[locationKey], safeBpc);
+      if (bottles > 0) return true;
+    }
+    return false;
+  }
+
+  const directShop = parseStockStringToBottles(masterRow?.shopStock, safeBpc);
+  if (directShop > 0) return true;
+
+  for (const [locationKey, rawValue] of Object.entries(stocks)) {
+    if (isGodownLike(locationKey)) continue;
+    const bottles = parseStockStringToBottles(rawValue, safeBpc);
+    if (bottles > 0) return true;
+  }
+
+  return false;
+}
+
+async function loadMasterProducts(options = {}) {
+  const { includeAll = false } = options;
   const filePath = stockLensPaths.brandsCsv;
   const stat = await fs.promises.stat(filePath);
 
-  if (cache.rows.length > 0 && cache.mtimeMs === stat.mtimeMs) {
-    return cache.rows;
+  if (cache.mtimeMs === stat.mtimeMs) {
+    return includeAll ? cache.allRows : cache.rows;
   }
 
   const raw = await fs.promises.readFile(filePath, "utf8");
   const lines = raw.split(/\r?\n/).filter((line) => line.trim() !== "");
   const tableLines = lines.slice(3).join("\n");
   const parsedRows = await parseCsvText(tableLines);
-  const mapped = parsedRows.map(mapMasterRow).filter((row) => row.itemCode);
+  const mappedAll = parsedRows
+    .map(mapMasterRow)
+    .filter((row) => row.itemCode);
+  const mapped = mappedAll.filter((row) => hasPositiveShopStock(row));
 
   cache = {
     mtimeMs: stat.mtimeMs,
     rows: mapped,
+    allRows: mappedAll,
   };
 
-  return mapped;
+  return includeAll ? mappedAll : mapped;
 }
 
-async function searchMasterProducts(query = "", limit = 50) {
-  const rows = await loadMasterProducts();
+async function searchMasterProducts(query = "", limit = 50, options = {}) {
+  const rows = await loadMasterProducts(options);
   const normalizedQuery = String(query || "").trim().toLowerCase();
   const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 10000);
 

@@ -140,6 +140,10 @@ function chunkOperators(entries) {
   return rows;
 }
 
+function normalizeItemCode(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
 function generateVerificationReportHTML(data) {
   const {
     dayKey,
@@ -148,6 +152,7 @@ function generateVerificationReportHTML(data) {
     firstScanAt,
     lastScanAt,
     nilCount,
+    nilSummaryRows,
     fastMovingSummary,
     locationSummaries,
     operatorSummary,
@@ -179,8 +184,8 @@ function generateVerificationReportHTML(data) {
         .map(
           ([left, right]) => `
         <div class="summary-row">
-          <span>${left.count}-${left.name}</span>
-          <span>${right ? `${right.count}-${right.name}` : ""}</span>
+          <span>${left.name} (${left.count})</span>
+          <span>${right ? `${right.name} (${right.count})` : ""}</span>
         </div>
       `
         )
@@ -218,6 +223,14 @@ function generateVerificationReportHTML(data) {
     .join("");
 
   const fastMovingLine = `Fast Moving (${fastMovingSummary.label}): ${fastMovingSummary.scannedProductCount}/${fastMovingSummary.trackedProducts}`;
+  const nilStockLine =
+    Array.isArray(nilSummaryRows) && nilSummaryRows.length > 0
+      ? `Nil Stock: ${nilSummaryRows
+          .map((row) => `${row.label}-${row.count}`)
+          .join(" | ")}`
+      : nilCount > 0
+        ? `Nil Stock: ${nilCount}`
+        : "No nil stock";
 
   return `
 <!DOCTYPE html>
@@ -311,7 +324,7 @@ function generateVerificationReportHTML(data) {
   </div>
 
   <div class="header-line">
-    <span>${nilCount > 0 ? `Nil Stock: ${nilCount}` : "No nil stock"}</span>
+    <span>${nilStockLine}</span>
   </div>
 
   <div class="header-line">
@@ -478,7 +491,7 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
     throw new Error("No active/current cycle found");
   }
 
-  const [locations, shopInfo, workers, phones, bestSellingRows, finishedRows, masterRows] =
+  const [locations, shopInfo, workers, phones, bestSellingRows, finishedRows, scanEvents, masterRows, allMasterRows] =
     await Promise.all([
     prisma.shopLocation.findMany({ orderBy: [{ sortOrder: "asc" }, { id: "asc" }] }),
     prisma.shopInfo.findUnique({ where: { id: 1 } }),
@@ -491,16 +504,36 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
         activityDate: { gte: dayRange.dayStart, lte: dayRange.dayEnd },
       },
     }),
+    prisma.cycleProductEvent.findMany({
+      where: {
+        cycleId: cycle.id,
+        activityDate: { gte: dayRange.dayStart, lte: dayRange.dayEnd },
+        eventScope: "unfinished",
+        eventAction: "upsert",
+      },
+      select: {
+        createdAt: true,
+        itemCode: true,
+      },
+      orderBy: [{ createdAt: "asc" }],
+    }),
     loadMasterProducts(),
+    loadMasterProducts({ includeAll: true }),
   ]);
 
   const workerNameById = new Map(
     workers.map((row) => [row.id, String(row.name || "").trim() || "Unknown"])
   );
 
+  const masterByCode = new Map(
+    masterRows.map((row) => [normalizeItemCode(row.itemCode), row])
+  );
+
   const latestByKey = new Map();
   finishedRows.forEach((row) => {
-    const key = `${row.shopLocationId}|${String(row.itemCode || "").trim().toLowerCase()}`;
+    const codeKey = normalizeItemCode(row.itemCode);
+    if (!codeKey || !masterByCode.has(codeKey)) return;
+    const key = `${row.shopLocationId}|${codeKey}`;
     const timeMs = new Date(
       row.finishedAt || row.updatedAt || row.createdAt || row.activityDate
     ).getTime();
@@ -513,19 +546,15 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
 
   const rowsByLocationCode = new Map();
   latestRows.forEach((row) => {
-    const key = `${row.shopLocationId}|${String(row.itemCode || "").trim().toLowerCase()}`;
+    const key = `${row.shopLocationId}|${normalizeItemCode(row.itemCode)}`;
     rowsByLocationCode.set(key, row);
   });
-
-  const masterByCode = new Map(
-    masterRows.map((row) => [String(row.itemCode || "").trim().toLowerCase(), row])
-  );
 
   const phoneSet = new Set();
   const phoneNameById = new Map(
     phones.map((row) => [row.id, String(row.name || "").trim()]).filter((row) => row[1])
   );
-  const scanTimes = [];
+  const finishedScanTimes = [];
   latestRows.forEach((row) => {
     if (row.phoneId && phoneNameById.has(row.phoneId)) {
       phoneSet.add(phoneNameById.get(row.phoneId));
@@ -534,8 +563,19 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
       phoneSet.add(String(row.phoneName).trim());
     }
     const timeValue = row.finishedAt || row.updatedAt || row.activityDate;
-    if (timeValue) scanTimes.push(new Date(timeValue).toISOString());
+    if (timeValue) finishedScanTimes.push(new Date(timeValue).toISOString());
   });
+
+  const scanTimesFromEvents = scanEvents
+    .map((row) => {
+      const codeKey = normalizeItemCode(row.itemCode);
+      if (!codeKey || !masterByCode.has(codeKey)) return null;
+      const date = new Date(row.createdAt);
+      return Number.isNaN(date.getTime()) ? null : date.toISOString();
+    })
+    .filter(Boolean);
+
+  const scanTimes = scanTimesFromEvents.length > 0 ? scanTimesFromEvents : finishedScanTimes;
 
   const operatorItemMap = new Map();
   latestRows.forEach((row) => {
@@ -563,7 +603,7 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
     const uncheckedRows = [];
 
     masterRows.forEach((master) => {
-      const codeKey = String(master.itemCode || "").trim().toLowerCase();
+      const codeKey = normalizeItemCode(master.itemCode);
       if (!codeKey) return;
       const targetBottles = getMasterStockBottles(master, location);
       if (targetBottles <= 0) return;
@@ -589,7 +629,7 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
 
     latestRows.forEach((row) => {
       if (row.shopLocationId !== location.id) return;
-      const codeKey = String(row.itemCode || "").trim().toLowerCase();
+      const codeKey = normalizeItemCode(row.itemCode);
       if (!codeKey || trackedCodes.has(codeKey)) return;
       const master = masterByCode.get(codeKey) || null;
       const name = buildDisplayName(
@@ -619,24 +659,34 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
 
   const nilLocationId = parseOptionalPositiveInt(shopInfo?.nilLocation);
   let nilCount = 0;
+  const nilSummaryRows = [];
   if (nilLocationId) {
     const sourceLocation = locations.find((row) => row.id === nilLocationId) || null;
     if (sourceLocation) {
       const targets = locations.filter((row) => row.id !== nilLocationId);
       for (const target of targets) {
-        for (const master of masterRows) {
+        let targetNilCount = 0;
+        for (const master of allMasterRows) {
           const sourceBottles = getMasterStockBottles(master, sourceLocation);
           const targetBottles = getMasterStockBottles(master, target);
           if (sourceBottles > 0 && targetBottles <= 0) {
             nilCount += 1;
+            targetNilCount += 1;
           }
         }
+        nilSummaryRows.push({
+          locationId: target.id,
+          label: getLocationLabel(target),
+          count: targetNilCount,
+        });
       }
     }
   }
 
   const bestSellingCodes = new Set(
-    bestSellingRows.map((row) => String(row.itemCode || "").trim().toLowerCase()).filter(Boolean)
+    bestSellingRows
+      .map((row) => String(row.itemCode || "").trim().toLowerCase())
+      .filter((code) => code && masterByCode.has(code))
   );
   const fastLocation =
     locations.find((row) =>
@@ -665,9 +715,10 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
     firstScanAt: scanTimes.length ? new Date(Math.min(...scanTimes.map((v) => new Date(v).getTime()))).toISOString() : null,
     lastScanAt: scanTimes.length ? new Date(Math.max(...scanTimes.map((v) => new Date(v).getTime()))).toISOString() : null,
     nilCount,
+    nilSummaryRows,
     fastMovingSummary: {
       label: fastLocation ? getLocationLabel(fastLocation) : "SHOP",
-      trackedProducts: bestSellingRows.length,
+      trackedProducts: bestSellingCodes.size,
       scannedProductCount: fastScanned,
     },
     locationSummaries,
@@ -717,6 +768,12 @@ function isDateWithinRange(value, dayRange) {
   return timeMs >= dayRange.dayStart.getTime() && timeMs <= dayRange.dayEnd.getTime();
 }
 
+function getUtcDayRangeFromValue(value) {
+  const parsed = parseDate(value, null);
+  if (!parsed) return null;
+  return getUtcDayRange(parsed.toISOString().slice(0, 10));
+}
+
 function upsertTouchedOperator(map, rawName, itemKey) {
   const displayName = String(rawName || "Unknown").trim() || "Unknown";
   const key = displayName.toLowerCase();
@@ -727,6 +784,125 @@ function upsertTouchedOperator(map, rawName, itemKey) {
     });
   }
   map.get(key).keys.add(itemKey);
+}
+
+function getRowUpdateTimeMs(row) {
+  const value = row.updatedAt || row.finishedAt || row.createdAt || row.activityDate;
+  const ms = new Date(value || 0).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+async function syncOperatorDailyMismatchSummaryTx(tx, { cycleId, operatorId, dayRange }) {
+  const normalizedCycleId = parseOptionalPositiveInt(cycleId);
+  const normalizedOperatorId = parseOptionalPositiveInt(operatorId);
+  if (!normalizedCycleId || !normalizedOperatorId || !dayRange) return null;
+
+  const rows = await tx.cycleFinishedStock.findMany({
+    where: {
+      cycleId: normalizedCycleId,
+      activityDate: {
+        gte: dayRange.dayStart,
+        lte: dayRange.dayEnd,
+      },
+      diffBottles: { not: 0 },
+      OR: [
+        { lastUpdatedByWorkerId: normalizedOperatorId },
+        { finishedByWorkerId: normalizedOperatorId },
+      ],
+    },
+    select: {
+      shopLocationId: true,
+      itemCode: true,
+      diffBottles: true,
+      isMatched: true,
+      activityDate: true,
+      finishedAt: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+
+  const latestByKey = new Map();
+  for (const row of rows) {
+    const key = `${row.shopLocationId}|${String(row.itemCode || "").trim().toLowerCase()}`;
+    if (!key) continue;
+    const timeMs = getRowUpdateTimeMs(row);
+    const existing = latestByKey.get(key);
+    if (!existing || timeMs >= existing.timeMs) {
+      latestByKey.set(key, { row, timeMs });
+    }
+  }
+
+  const mismatchCount = Array.from(latestByKey.values()).reduce((count, entry) => {
+    const diffValue = Number(entry.row.diffBottles || 0);
+    const hasMismatch = diffValue !== 0 || !entry.row.isMatched;
+    return hasMismatch ? count + 1 : count;
+  }, 0);
+
+  await tx.operatorDailyMismatchSummary.upsert({
+    where: {
+      cycleId_operatorId_activityDate: {
+        cycleId: normalizedCycleId,
+        operatorId: normalizedOperatorId,
+        activityDate: dayRange.dayStart,
+      },
+    },
+    create: {
+      cycleId: normalizedCycleId,
+      operatorId: normalizedOperatorId,
+      activityDate: dayRange.dayStart,
+      mismatchCount,
+    },
+    update: {
+      mismatchCount,
+    },
+  });
+
+  return {
+    cycleId: normalizedCycleId,
+    operatorId: normalizedOperatorId,
+    activityDate: dayRange.dayKey,
+    mismatchCount,
+  };
+}
+
+async function syncDailyMismatchSummariesForRowsTx(tx, { cycleId, rows, preferredOperatorId }) {
+  const normalizedCycleId = parseOptionalPositiveInt(cycleId);
+  if (!normalizedCycleId) return [];
+  const inputRows = Array.isArray(rows) ? rows : [];
+  if (inputRows.length === 0) return [];
+
+  const targets = new Map();
+  for (const row of inputRows) {
+    const dayRange = getUtcDayRangeFromValue(row.activityDate);
+    if (!dayRange) continue;
+
+    const operatorIds = new Set();
+    const preferred = parseOptionalPositiveInt(preferredOperatorId);
+    const updatedBy = parseOptionalPositiveInt(row.lastUpdatedByWorkerId);
+    const finishedBy = parseOptionalPositiveInt(row.finishedByWorkerId);
+    if (preferred) operatorIds.add(preferred);
+    if (updatedBy) operatorIds.add(updatedBy);
+    if (finishedBy) operatorIds.add(finishedBy);
+
+    for (const operatorId of operatorIds) {
+      const key = `${operatorId}|${dayRange.dayKey}`;
+      if (!targets.has(key)) {
+        targets.set(key, { operatorId, dayRange });
+      }
+    }
+  }
+
+  const summaries = [];
+  for (const target of targets.values()) {
+    const summary = await syncOperatorDailyMismatchSummaryTx(tx, {
+      cycleId: normalizedCycleId,
+      operatorId: target.operatorId,
+      dayRange: target.dayRange,
+    });
+    if (summary) summaries.push(summary);
+  }
+  return summaries;
 }
 
 async function buildDifferenceDataset({ cycleId, dayRange, scope }) {
@@ -773,8 +949,9 @@ async function buildDifferenceDataset({ cycleId, dayRange, scope }) {
   };
 
   for (const row of finishedRows) {
-    const codeKey = String(row.itemCode || "").trim().toLowerCase();
+    const codeKey = normalizeItemCode(row.itemCode);
     if (!codeKey || !row.shopLocationId) continue;
+    if (!masterByCode.has(codeKey)) continue;
 
     const itemKey = `${row.shopLocationId}|${codeKey}`;
     const location = locationById.get(row.shopLocationId) || null;
@@ -956,7 +1133,9 @@ function generateDifferenceReportHTML(data) {
       : `Only scanned today (${todayDate})`;
 
   const renderSection = (section) => {
-    const items = Array.isArray(section?.items) ? section.items : [];
+    const items = (Array.isArray(section?.items) ? section.items : []).filter(
+      (item) => Number(item?.diff || 0) !== 0
+    );
     if (items.length === 0) {
       return `
         <div style="font-size: 13px; font-weight: 900; margin: 3px 0; display: flex; justify-content: space-between;">
@@ -978,10 +1157,8 @@ function generateDifferenceReportHTML(data) {
       <table>
         <thead>
           <tr>
-            <th style="width: 46%;">Name</th>
-            <th style="width: 18%;">Curr</th>
-            <th style="width: 18%;">Scanned</th>
-            <th style="width: 18%;">Diff</th>
+            <th style="width: 72%;">Name</th>
+            <th style="width: 28%;">Scanned</th>
           </tr>
         </thead>
         <tbody>
@@ -990,9 +1167,7 @@ function generateDifferenceReportHTML(data) {
               (item) => `
             <tr>
               <td>${item.name}</td>
-              <td>${item.master}</td>
               <td>${item.scanned}</td>
-              <td>${item.diffLabel}</td>
             </tr>
           `
             )
@@ -1251,7 +1426,7 @@ function generateOperatorDifferenceCommonHTML(data) {
 }
 
 function generateFinishReportHTML(data) {
-  const { cycleDate, operatorName, generatedAt, sections = [] } = data;
+  const { cycleDate, operatorName, todayMismatchCount = 0, todayMismatchDate = "", generatedAt, sections = [] } = data;
   const operatorLabel = String(operatorName || "Unknown").trim() || "Unknown";
 
   const sectionHtml = sections
@@ -1266,9 +1441,7 @@ function generateFinishReportHTML(data) {
       <table>
         <thead>
           <tr>
-            <th style="width: 46%;">Name</th>
-            <th style="width: 18%;">Curr</th>
-            <th style="width: 18%;">Scan</th>
+            <th style="width: 82%;">Name</th>
             <th style="width: 18%;">Diff</th>
           </tr>
         </thead>
@@ -1280,14 +1453,12 @@ function generateFinishReportHTML(data) {
                     (item) => `
             <tr>
               <td>${item.name}</td>
-              <td>${item.currentStock}</td>
-              <td>${item.scanned}</td>
               <td>${item.diffLabel}</td>
             </tr>
           `
                   )
                   .join("")
-              : `<tr><td colspan="4">No items moved</td></tr>`
+              : `<tr><td colspan="2">No items moved</td></tr>`
           }
         </tbody>
       </table>
@@ -1363,7 +1534,10 @@ function generateFinishReportHTML(data) {
   <div class="separator"></div>
 
   <div class="header-line">
-    <span>Operator: ${operatorLabel}</span>
+    <span>Operator: ${operatorLabel} (${todayMismatchCount})</span>
+  </div>
+  <div class="header-line">
+    <span>Today Mismatch Total: ${todayMismatchCount}${todayMismatchDate ? ` (${todayMismatchDate})` : ""}</span>
   </div>
 
   <div class="separator"></div>
@@ -1384,16 +1558,33 @@ async function buildFinishReportDataset({
   movedUnfinishedRows,
 }) {
   const movedRows = Array.isArray(movedUnfinishedRows) ? movedUnfinishedRows : [];
-  const [cycle, operator, locations] = await Promise.all([
+  const todayRange = getUtcDayRange(new Date().toISOString().slice(0, 10));
+  const [cycle, operator, locations, mismatchSummary] = await Promise.all([
     prisma.cycle.findUnique({ where: { id: cycleId } }),
     operatorId ? prisma.worker.findUnique({ where: { id: operatorId } }) : null,
     prisma.shopLocation.findMany({ orderBy: [{ sortOrder: "asc" }, { id: "asc" }] }),
+    operatorId && todayRange
+      ? prisma.operatorDailyMismatchSummary.findUnique({
+          where: {
+            cycleId_operatorId_activityDate: {
+              cycleId: Number(cycleId),
+              operatorId: Number(operatorId),
+              activityDate: todayRange.dayStart,
+            },
+          },
+        })
+      : null,
   ]);
 
   const locationById = new Map(locations.map((row) => [row.id, row]));
   const grouped = new Map();
 
   for (const row of movedRows) {
+    const diffValue = Number(row.diffBottles) || 0;
+    if (diffValue === 0) {
+      continue;
+    }
+
     const location = locationById.get(row.shopLocationId) || null;
     const locationLabel = getLocationLabel(location);
     const groupKey = String(row.shopLocationId || "0");
@@ -1406,7 +1597,6 @@ async function buildFinishReportDataset({
       });
     }
 
-    const safeBpc = Number(row.bpc) || 12;
     const displayName = buildDisplayName(
       row.brandName,
       row.packValue,
@@ -1415,10 +1605,8 @@ async function buildFinishReportDataset({
     );
     grouped.get(groupKey).rows.push({
       name: displayName,
-      currentStock: formatBottleCountAsStock(row.currentStockBottles, safeBpc, false),
-      scanned: formatBottleCountAsStock(row.quantityBottles, safeBpc, false),
-      diffLabel: toSignedDiffLabel(row.diffBottles),
-      diffValue: Number(row.diffBottles) || 0,
+      diffLabel: toSignedDiffLabel(diffValue),
+      diffValue,
     });
   }
 
@@ -1441,6 +1629,8 @@ async function buildFinishReportDataset({
   return {
     cycleDate: getCycleDateLabel(cycle || { id: cycleId, startDate: new Date().toISOString() }),
     operatorName: String(operator?.name || "").trim() || "Unknown",
+    todayMismatchDate: todayRange?.dayKey || "",
+    todayMismatchCount: Number(mismatchSummary?.mismatchCount || 0),
     generatedAt: new Date().toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
     }),
@@ -1534,11 +1724,16 @@ router.get("/unfinished", async (req, res) => {
     return res.status(400).json({ success: false, message: "shopLocationId is required" });
   }
 
-  const rows = await prisma.cycleUnfinishedStock.findMany({
-    where: { cycleId, shopLocationId },
-    orderBy: [{ activityDate: "desc" }, { id: "desc" }],
-  });
-  return res.json({ success: true, count: rows.length, rows });
+  const [rows, masterRows] = await Promise.all([
+    prisma.cycleUnfinishedStock.findMany({
+      where: { cycleId, shopLocationId },
+      orderBy: [{ activityDate: "desc" }, { id: "desc" }],
+    }),
+    loadMasterProducts(),
+  ]);
+  const masterCodeSet = new Set(masterRows.map((row) => normalizeItemCode(row.itemCode)).filter(Boolean));
+  const filteredRows = rows.filter((row) => masterCodeSet.has(normalizeItemCode(row.itemCode)));
+  return res.json({ success: true, count: filteredRows.length, rows: filteredRows });
 });
 
 router.get("/unfinished/by-operator", async (req, res) => {
@@ -1552,16 +1747,22 @@ router.get("/unfinished/by-operator", async (req, res) => {
     });
   }
 
-  const rows = await prisma.cycleUnfinishedStock.findMany({
-    where: {
-      cycleId,
-      lastUpdatedByWorkerId: operatorId,
-      shopLocationId,
-    },
-    orderBy: [{ activityDate: "desc" }, { id: "desc" }],
-  });
+  const [rows, masterRows] = await Promise.all([
+    prisma.cycleUnfinishedStock.findMany({
+      where: {
+        cycleId,
+        lastUpdatedByWorkerId: operatorId,
+        shopLocationId,
+        diffBottles: { not: 0 },
+      },
+      orderBy: [{ activityDate: "desc" }, { id: "desc" }],
+    }),
+    loadMasterProducts(),
+  ]);
+  const masterCodeSet = new Set(masterRows.map((row) => normalizeItemCode(row.itemCode)).filter(Boolean));
+  const filteredRows = rows.filter((row) => masterCodeSet.has(normalizeItemCode(row.itemCode)));
 
-  return res.json({ success: true, count: rows.length, rows });
+  return res.json({ success: true, count: filteredRows.length, rows: filteredRows });
 });
 
 router.get("/finished", async (req, res) => {
@@ -1574,11 +1775,84 @@ router.get("/finished", async (req, res) => {
     return res.status(400).json({ success: false, message: "shopLocationId is required" });
   }
 
-  const rows = await prisma.cycleFinishedStock.findMany({
-    where: { cycleId, shopLocationId },
-    orderBy: [{ activityDate: "desc" }, { id: "desc" }],
+  const [rows, masterRows] = await Promise.all([
+    prisma.cycleFinishedStock.findMany({
+      where: { cycleId, shopLocationId },
+      orderBy: [{ activityDate: "desc" }, { id: "desc" }],
+    }),
+    loadMasterProducts(),
+  ]);
+  const masterCodeSet = new Set(masterRows.map((row) => normalizeItemCode(row.itemCode)).filter(Boolean));
+  const filteredRows = rows.filter((row) => masterCodeSet.has(normalizeItemCode(row.itemCode)));
+  return res.json({ success: true, count: filteredRows.length, rows: filteredRows });
+});
+
+router.get("/finished/progress", async (req, res) => {
+  const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
+  const requestedCycleId = parseOptionalPositiveInt(req.query.cycleId);
+
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "shopLocationId is required" });
+  }
+
+  const cycle =
+    requestedCycleId != null
+      ? await prisma.cycle.findUnique({ where: { id: requestedCycleId } })
+      : await prisma.cycle.findFirst({
+          where: { status: "active" },
+          orderBy: [{ startDate: "desc" }],
+        });
+  if (!cycle) {
+    return res.status(404).json({ success: false, message: "No active/current cycle found" });
+  }
+
+  const location = await prisma.shopLocation.findUnique({ where: { id: shopLocationId } });
+  if (!location) {
+    return res.status(404).json({ success: false, message: "Shop location not found" });
+  }
+
+  const [finishedRows, masterRows] = await Promise.all([
+    prisma.cycleFinishedStock.findMany({
+      where: {
+        cycleId: cycle.id,
+        shopLocationId,
+      },
+      select: {
+        itemCode: true,
+      },
+    }),
+    loadMasterProducts(),
+  ]);
+
+  const scannedCodeSet = new Set(
+    finishedRows
+      .map((row) => normalizeItemCode(row.itemCode))
+      .filter(Boolean)
+  );
+
+  const totalCodeSet = new Set();
+  for (const master of masterRows) {
+    const code = normalizeItemCode(master.itemCode);
+    if (!code || totalCodeSet.has(code)) continue;
+    // Total products should represent total unique items from brands/master CSV.
+    totalCodeSet.add(code);
+  }
+
+  const scannedCount = Array.from(scannedCodeSet).filter((code) => totalCodeSet.has(code)).length;
+  const totalProducts = totalCodeSet.size;
+  const remainingCount = Math.max(totalProducts - scannedCount, 0);
+
+  return res.json({
+    success: true,
+    cycleId: cycle.id,
+    cycleDate: getCycleDateLabel(cycle),
+    shopLocationId,
+    locationLabel: getLocationLabel(location),
+    scannedCount,
+    totalProducts,
+    remainingCount,
+    progressLabel: `${scannedCount}/${totalProducts}`,
   });
-  return res.json({ success: true, count: rows.length, rows });
 });
 
 router.get("/verify/mismatched-finished", async (req, res) => {
@@ -1625,7 +1899,9 @@ router.get("/verify/mismatched-finished", async (req, res) => {
   // Keep latest mismatched row per item per location for this operator in this cycle.
   const dedupMap = new Map();
   for (const row of finishedRows) {
-    const key = `${row.shopLocationId}|${String(row.itemCode || "").trim().toLowerCase()}`;
+    const codeKey = normalizeItemCode(row.itemCode);
+    if (!codeKey || !masterByCode.has(codeKey)) continue;
+    const key = `${row.shopLocationId}|${codeKey}`;
     if (!dedupMap.has(key)) {
       dedupMap.set(key, row);
     }
@@ -1678,6 +1954,81 @@ router.get("/verify/mismatched-finished", async (req, res) => {
   });
 });
 
+router.get("/verify/unchecked-finished", async (req, res) => {
+  const cycleId = parseOptionalPositiveInt(req.query.cycleId);
+  const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
+
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "shopLocationId is required" });
+  }
+
+  const cycle =
+    cycleId != null
+      ? await prisma.cycle.findUnique({ where: { id: cycleId } })
+      : await prisma.cycle.findFirst({
+          where: { status: "active" },
+          orderBy: [{ startDate: "desc" }],
+        });
+  if (!cycle) {
+    return res.status(404).json({ success: false, message: "No active/current cycle found" });
+  }
+
+  const [location, masterRows, finishedRows] = await Promise.all([
+    prisma.shopLocation.findUnique({ where: { id: shopLocationId } }),
+    loadMasterProducts(),
+    prisma.cycleFinishedStock.findMany({
+      where: {
+        cycleId: cycle.id,
+        shopLocationId,
+      },
+      select: {
+        itemCode: true,
+      },
+    }),
+  ]);
+
+  if (!location) {
+    return res.status(404).json({ success: false, message: "Shop location not found" });
+  }
+
+  const scannedCodeSet = new Set(
+    finishedRows
+      .map((row) => normalizeItemCode(row.itemCode))
+      .filter(Boolean)
+  );
+
+  const rows = [];
+  const addedCodeSet = new Set();
+  for (const master of masterRows) {
+    const codeKey = normalizeItemCode(master.itemCode);
+    if (!codeKey || addedCodeSet.has(codeKey) || scannedCodeSet.has(codeKey)) continue;
+    addedCodeSet.add(codeKey);
+    rows.push({
+      itemCode: master.itemCode || "",
+      itemName: master.itemName || "",
+      brandName: master.brandName || "",
+      packValue: master.packValue || "",
+      bpc: Number(master.bpc) || null,
+      mrp: master.mrp ?? null,
+      barcode: master.barcode || "",
+      cycleId: cycle.id,
+      cycleStatus: cycle.status,
+      shopLocationId,
+      shopLocationName: getLocationLabel(location),
+    });
+  }
+
+  return res.json({
+    success: true,
+    cycleId: cycle.id,
+    cycleStatus: cycle.status,
+    shopLocationId,
+    shopLocationName: getLocationLabel(location),
+    count: rows.length,
+    rows,
+  });
+});
+
 router.get("/fast-moving-summary", async (req, res) => {
   const shopLocationId = Number(req.query.shopLocationId);
   const cycleIdRaw = req.query.cycleId;
@@ -1721,6 +2072,10 @@ router.get("/fast-moving-summary", async (req, res) => {
   const masterByCode = new Map(
     masterRows.map((row) => [String(row.itemCode || "").trim().toLowerCase(), row])
   );
+  const eligibleBestSellingRows = bestSellingRows.filter((row) => {
+    const code = String(row.itemCode || "").trim().toLowerCase();
+    return code && masterByCode.has(code);
+  });
   const latestFinishedByCode = new Map();
 
   for (const row of finishedRows) {
@@ -1733,7 +2088,7 @@ router.get("/fast-moving-summary", async (req, res) => {
   const uncheckedRows = [];
   let lastScannedAt = null;
 
-  for (const best of bestSellingRows) {
+  for (const best of eligibleBestSellingRows) {
     const itemCode = String(best.itemCode || "").trim();
     const key = itemCode.toLowerCase();
     const finished = latestFinishedByCode.get(key) || null;
@@ -1776,10 +2131,10 @@ router.get("/fast-moving-summary", async (req, res) => {
   }
 
   const lastBestSellingModifiedAt =
-    bestSellingRows.length > 0
+    eligibleBestSellingRows.length > 0
       ? new Date(
           Math.max(
-            ...bestSellingRows.map((row) => new Date(row.createdAt).getTime())
+            ...eligibleBestSellingRows.map((row) => new Date(row.createdAt).getTime())
           )
         ).toISOString()
       : null;
@@ -1789,7 +2144,7 @@ router.get("/fast-moving-summary", async (req, res) => {
     checkedDate,
     cycleId: cycleId || null,
     shopLocationId,
-    totalCount: bestSellingRows.length,
+    totalCount: eligibleBestSellingRows.length,
     scannedCount: scannedRows.length,
     uncheckedCount: uncheckedRows.length,
     lastBestSellingModifiedAt,
@@ -1859,6 +2214,15 @@ router.post("/unfinished/upsert", async (req, res) => {
   }
   if (cycle.status !== "active") {
     return res.status(400).json({ success: false, message: "Cycle is not active" });
+  }
+
+  const masterRows = await loadMasterProducts();
+  const masterCodeSet = new Set(masterRows.map((row) => normalizeItemCode(row.itemCode)).filter(Boolean));
+  if (!masterCodeSet.has(normalizeItemCode(itemCode))) {
+    return res.status(400).json({
+      success: false,
+      message: "Item is not eligible (zero in all shop locations in current master CSV)",
+    });
   }
 
   const qty = Number(quantityBottles || 0);
@@ -1985,6 +2349,12 @@ router.post("/unfinished/finish", async (req, res) => {
     return res.status(400).json({ success: false, message: "Invalid activityDate" });
   }
 
+  const masterRows = await loadMasterProducts();
+  const masterCodeSet = new Set(masterRows.map((row) => normalizeItemCode(row.itemCode)).filter(Boolean));
+  if (!masterCodeSet.has(normalizeItemCode(itemCode))) {
+    return res.status(404).json({ success: false, message: "Unfinished row not found" });
+  }
+
   const result = await prisma.$transaction(async (tx) => {
     const unfinished = await tx.cycleUnfinishedStock.findUnique({
       where: {
@@ -2000,7 +2370,13 @@ router.post("/unfinished/finish", async (req, res) => {
     if (!unfinished) {
       return null;
     }
-    return moveUnfinishedToFinished(tx, unfinished, finishedByWorkerId, "finish");
+    const moveResult = await moveUnfinishedToFinished(tx, unfinished, finishedByWorkerId, "finish");
+    await syncDailyMismatchSummariesForRowsTx(tx, {
+      cycleId: Number(cycleId),
+      rows: [unfinished],
+      preferredOperatorId: parseOptionalPositiveInt(finishedByWorkerId),
+    });
+    return moveResult;
   });
 
   if (!result) {
@@ -2022,6 +2398,7 @@ router.post("/unfinished/finish-by-operator", async (req, res) => {
   const previewMode = ["true", "1", "yes"].includes(
     String(preview || "").trim().toLowerCase()
   );
+  let resolvedPrinterId = normalizedPrinterId;
 
   if (!normalizedCycleId || !normalizedOperatorId) {
     return res.status(400).json({
@@ -2035,23 +2412,28 @@ router.post("/unfinished/finish-by-operator", async (req, res) => {
     return res.status(404).json({ success: false, message: "Cycle not found" });
   }
 
+  const masterRows = await loadMasterProducts();
+  const masterCodeSet = new Set(masterRows.map((row) => normalizeItemCode(row.itemCode)).filter(Boolean));
+
   const result = await prisma.$transaction(async (tx) => {
     const rows = await tx.cycleUnfinishedStock.findMany({
       where: {
         cycleId: normalizedCycleId,
         lastUpdatedByWorkerId: normalizedOperatorId,
+        diffBottles: { not: 0 },
         ...(normalizedShopLocationId ? { shopLocationId: normalizedShopLocationId } : {}),
       },
       orderBy: [{ id: "asc" }],
     });
+    const eligibleRows = rows.filter((row) => masterCodeSet.has(normalizeItemCode(row.itemCode)));
 
-    if (rows.length === 0) {
+    if (eligibleRows.length === 0) {
       return { moved: [], movedUnfinishedRows: [] };
     }
 
     const moved = [];
     const movedUnfinishedRows = [];
-    for (const row of rows) {
+    for (const row of eligibleRows) {
       const moveResult = await moveUnfinishedToFinished(
         tx,
         row,
@@ -2061,7 +2443,12 @@ router.post("/unfinished/finish-by-operator", async (req, res) => {
       moved.push(moveResult);
       movedUnfinishedRows.push(row);
     }
-    return { moved, movedUnfinishedRows };
+    const mismatchSummaries = await syncDailyMismatchSummariesForRowsTx(tx, {
+      cycleId: normalizedCycleId,
+      rows: movedUnfinishedRows,
+      preferredOperatorId: normalizedOperatorId || normalizedFinishedByWorkerId,
+    });
+    return { moved, movedUnfinishedRows, mismatchSummaries };
   });
 
   const finishReportDataset = await buildFinishReportDataset({
@@ -2071,8 +2458,16 @@ router.post("/unfinished/finish-by-operator", async (req, res) => {
   });
   const finishReportHtml = generateFinishReportHTML(finishReportDataset);
 
+  if (!previewMode && !resolvedPrinterId) {
+    const defaultPrinter = await prisma.printer.findFirst({
+      where: { defaultPrinter: true },
+      orderBy: [{ id: "asc" }],
+    });
+    resolvedPrinterId = defaultPrinter?.id || null;
+  }
+
   let print = {
-    requested: Boolean(normalizedPrinterId) && !previewMode,
+    requested: Boolean(resolvedPrinterId) && !previewMode,
     attempted: false,
     success: false,
     skipped: false,
@@ -2094,14 +2489,14 @@ router.post("/unfinished/finish-by-operator", async (req, res) => {
       skipped: true,
       message: "No unfinished rows moved. Print skipped.",
     };
-  } else if (!normalizedPrinterId) {
+  } else if (!resolvedPrinterId) {
     print = {
       ...print,
       skipped: true,
-      message: "No printer selected. Print skipped.",
+      message: "No default printer selected. Print skipped.",
     };
   } else {
-    const printerRow = await prisma.printer.findUnique({ where: { id: normalizedPrinterId } });
+    const printerRow = await prisma.printer.findUnique({ where: { id: resolvedPrinterId } });
     if (!printerRow) {
       print = {
         ...print,
@@ -2160,12 +2555,15 @@ router.post("/unfinished/finish-by-operator", async (req, res) => {
     finishReport: {
       cycleDate: finishReportDataset.cycleDate,
       operatorName: finishReportDataset.operatorName,
+      todayMismatchCount: finishReportDataset.todayMismatchCount,
+      todayMismatchDate: finishReportDataset.todayMismatchDate,
       sectionCount: finishReportDataset.sections.length,
       sections: finishReportDataset.sections.map((section) => ({
         label: section.label,
         count: section.rows.length,
       })),
     },
+    mismatchSummaryUpdates: result.mismatchSummaries || [],
     finishReportHtml,
     print,
   });
@@ -2200,6 +2598,9 @@ router.post("/unfinished/finish-today", async (req, res) => {
     return res.status(404).json({ success: false, message: "No active/current cycle found" });
   }
 
+  const masterRows = await loadMasterProducts();
+  const masterCodeSet = new Set(masterRows.map((row) => normalizeItemCode(row.itemCode)).filter(Boolean));
+
   const where = {
     cycleId: resolvedCycle.id,
     activityDate: {
@@ -2215,13 +2616,14 @@ router.post("/unfinished/finish-today", async (req, res) => {
       where,
       orderBy: [{ id: "asc" }],
     });
+    const eligibleRows = rows.filter((row) => masterCodeSet.has(normalizeItemCode(row.itemCode)));
 
-    if (rows.length === 0) {
+    if (eligibleRows.length === 0) {
       return { moved: [] };
     }
 
     const moved = [];
-    for (const row of rows) {
+    for (const row of eligibleRows) {
       const moveResult = await moveUnfinishedToFinished(
         tx,
         row,
@@ -2231,7 +2633,13 @@ router.post("/unfinished/finish-today", async (req, res) => {
       moved.push(moveResult);
     }
 
-    return { moved };
+    const mismatchSummaries = await syncDailyMismatchSummariesForRowsTx(tx, {
+      cycleId: resolvedCycle.id,
+      rows: eligibleRows,
+      preferredOperatorId: normalizedOperatorId || normalizedFinishedByWorkerId,
+    });
+
+    return { moved, mismatchSummaries };
   });
 
   return res.json({
@@ -2244,6 +2652,7 @@ router.post("/unfinished/finish-today", async (req, res) => {
     finishedByWorkerId: normalizedFinishedByWorkerId || null,
     finishedCount: result.moved.length,
     unfinishedIds: result.moved.map((row) => row.unfinishedId),
+    mismatchSummaryUpdates: result.mismatchSummaries || [],
   });
 });
 

@@ -464,6 +464,10 @@ async function buildBestSellingPayload({ cycle, location, analysisDate = "" }) {
   const masterByCode = new Map(
     masterRows.map((row) => [String(row.itemCode || "").trim().toLowerCase(), row])
   );
+  const eligibleBestSellingRows = bestSellingRows.filter((row) => {
+    const code = String(row.itemCode || "").trim().toLowerCase();
+    return code && masterByCode.has(code);
+  });
 
   const rowsByCode = new Map();
 
@@ -481,7 +485,7 @@ async function buildBestSellingPayload({ cycle, location, analysisDate = "" }) {
 
   const distinctActivityDays = new Set();
   const trackedCodeSet = new Set(
-    bestSellingRows
+    eligibleBestSellingRows
       .map((row) => String(row.itemCode || "").trim().toLowerCase())
       .filter(Boolean)
   );
@@ -512,7 +516,7 @@ async function buildBestSellingPayload({ cycle, location, analysisDate = "" }) {
 
   const products = [];
 
-  for (const best of bestSellingRows) {
+  for (const best of eligibleBestSellingRows) {
     const code = String(best.itemCode || "").trim();
     if (!code) continue;
 

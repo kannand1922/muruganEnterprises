@@ -5,7 +5,13 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "pm2:start": "pm2 startOrRestart ecosystem.config.cjs --update-env",
+    "pm2:restart": "pm2 restart ecosystem.config.cjs --update-env",
+    "pm2:stop": "pm2 stop stocklens-backend",
+    "pm2:delete": "pm2 delete stocklens-backend",
+    "pm2:logs": "pm2 logs stocklens-backend",
+    "pm2:save": "pm2 save"
   },
   "keywords": [],
   "author": "",
@@ -14,6 +20,7 @@
     "cors": "^2.8.5",
     "csv-parser": "^3.2.0",
     "express": "^5.1.0",
+    "pm2": "^6.0.13",
     "node-thermal-printer": "^4.5.0",
     "nodemon": "^3.1.11",
     "puppeteer": "^24.20.0",

@@ -20,6 +20,7 @@ const {
   generateLegacyVerificationReportHTML,
   sendHtmlToPrinterByIp,
 } = require("../services/desktopCompat");
+const { evaluateLowStock, runLowStockCheckAndNotify } = require("../services/lowStockAlerts");
 
 const router = express.Router();
 
@@ -42,6 +43,25 @@ function parsePositiveInt(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return Math.trunc(parsed);
+}
+
+function parseBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function parseDateBoundary(rawValue, endOfDay = false) {
+  const value = String(rawValue || "").trim();
+  if (!value) return null;
+  const parsed = new Date(
+    `${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`
+  );
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
 }
 
 async function resolveLocationOrError(req, res, options = {}) {
@@ -373,6 +393,248 @@ router.get("/api/allprinters", async (req, res) => {
 router.get("/api/operators", async (req, res) => {
   const payload = await getLegacyOperatorsPayload();
   return res.json(payload);
+});
+
+router.get("/api/low-stock/list", async (req, res) => {
+  const requestedLocationCode = String(req.query.location || "").trim();
+  const notificationsOnly = parseBoolean(req.query.notificationsOnly, false);
+  const search = String(req.query.search || "").trim().toLowerCase();
+  const ruleTypeFilter = String(req.query.ruleType || "").trim().toLowerCase();
+  const packFilter = String(req.query.pack || "").trim().toLowerCase();
+
+  const { rows } = await getLocationsWithDefault();
+  const locationByCode = new Map(rows.map((row) => [String(row.locationCode || "").trim().toLowerCase(), row]));
+  const requestedLocation = requestedLocationCode
+    ? locationByCode.get(requestedLocationCode.toLowerCase()) || null
+    : null;
+
+  if (requestedLocationCode && !requestedLocation) {
+    return res.status(400).json({
+      success: false,
+      message: `Invalid location code: ${requestedLocationCode}`,
+    });
+  }
+
+  const snapshot = await evaluateLowStock({
+    shopLocationIds: requestedLocation ? [requestedLocation.id] : null,
+    onlyEnabledLocations: notificationsOnly,
+    includeTokens: false,
+  });
+
+  const flattenedRows = [];
+  for (const location of snapshot.locations || []) {
+    for (const row of location.lowRows || []) {
+      flattenedRows.push({
+        shopLocationId: location.shopLocationId,
+        locationCode: location.locationCode,
+        locationName: location.locationName,
+        itemCode: row.itemCode,
+        itemName: row.itemName,
+        brandName: row.brandName,
+        packValue: row.packValue,
+        displayName: row.displayName,
+        thresholdBottles: row.thresholdBottles,
+        currentBottles: row.currentBottles,
+        ruleType: row.ruleType,
+      });
+    }
+  }
+
+  const filteredRows = flattenedRows.filter((row) => {
+    if (ruleTypeFilter && String(row.ruleType || "").toLowerCase() !== ruleTypeFilter) {
+      return false;
+    }
+    if (packFilter && String(row.packValue || "").trim().toLowerCase() !== packFilter) {
+      return false;
+    }
+    if (!search) return true;
+    const haystack = [
+      row.locationCode,
+      row.locationName,
+      row.itemCode,
+      row.itemName,
+      row.brandName,
+      row.packValue,
+      row.displayName,
+      row.ruleType,
+    ]
+      .map((value) => String(value || "").toLowerCase())
+      .join(" ");
+    return search
+      .split(/\s+/)
+      .filter(Boolean)
+      .every((token) => haystack.includes(token));
+  });
+
+  return res.json({
+    success: true,
+    generatedAt: snapshot.generatedAt,
+    locationCount: snapshot.locationCount,
+    locationsWithLowStock: snapshot.locationsWithLowStock,
+    totalLowProducts: snapshot.totalLowProducts,
+    count: filteredRows.length,
+    filters: {
+      location: requestedLocationCode || "",
+      notificationsOnly,
+      ruleType: ruleTypeFilter || "",
+      pack: packFilter || "",
+      search: search || "",
+    },
+    rows: filteredRows,
+  });
+});
+
+router.post("/api/low-stock/check-now", async (req, res) => {
+  const requestedLocationCode = String(req.body?.location || "").trim();
+  const dryRun = parseBoolean(req.body?.dryRun, false);
+  const forceResend = parseBoolean(req.body?.forceResend, false);
+
+  let shopLocationIds = null;
+  if (requestedLocationCode) {
+    const { rows } = await getLocationsWithDefault();
+    const selected = resolveLocationFromRows(rows, requestedLocationCode);
+    if (!selected) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid location code: ${requestedLocationCode}`,
+      });
+    }
+    shopLocationIds = [selected.id];
+  }
+
+  const result = await runLowStockCheckAndNotify({
+    shopLocationIds,
+    dryRun,
+    trigger: "desktop_manual",
+    enforceCsvVersionOnce: !forceResend,
+  });
+
+  return res.json(result);
+});
+
+router.get("/api/low-stock/notifications", async (req, res) => {
+  const requestedLocationCode = String(req.query.location || "").trim();
+  const statusFilter = String(req.query.status || "").trim().toLowerCase();
+  const validStatuses = new Set(["pending", "sent", "failed", "skipped"]);
+  const dateFromRaw = String(req.query.dateFrom || "").trim();
+  const dateToRaw = String(req.query.dateTo || "").trim();
+  const dateFrom = dateFromRaw ? parseDateBoundary(dateFromRaw, false) : null;
+  const dateTo = dateToRaw ? parseDateBoundary(dateToRaw, true) : null;
+
+  if (dateFromRaw && !dateFrom) {
+    return res.status(400).json({ success: false, message: "Invalid dateFrom" });
+  }
+  if (dateToRaw && !dateTo) {
+    return res.status(400).json({ success: false, message: "Invalid dateTo" });
+  }
+  if (dateFrom && dateTo && dateTo.getTime() < dateFrom.getTime()) {
+    return res.status(400).json({
+      success: false,
+      message: "dateTo must be greater than or equal to dateFrom",
+    });
+  }
+  if (statusFilter && statusFilter !== "all" && !validStatuses.has(statusFilter)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid status. Use all, pending, sent, failed, or skipped",
+    });
+  }
+
+  const { rows } = await getLocationsWithDefault();
+  const requestedLocation = requestedLocationCode
+    ? resolveLocationFromRows(rows, requestedLocationCode)
+    : null;
+  if (requestedLocationCode && !requestedLocation) {
+    return res.status(400).json({
+      success: false,
+      message: `Invalid location code: ${requestedLocationCode}`,
+    });
+  }
+
+  const where = {
+    ...(requestedLocation ? { shopLocationId: requestedLocation.id } : {}),
+    ...(statusFilter && statusFilter !== "all" ? { status: statusFilter } : {}),
+    ...(dateFrom || dateTo
+      ? {
+          createdAt: {
+            ...(dateFrom ? { gte: dateFrom } : {}),
+            ...(dateTo ? { lte: dateTo } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const rowsFromDb = await prisma.lowStockNotificationRun.findMany({
+    where,
+    include: {
+      shopLocation: {
+        select: {
+          id: true,
+          locationCode: true,
+          locationName: true,
+        },
+      },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: 500,
+  });
+
+  const mappedRows = rowsFromDb.map((row) => ({
+    id: row.id,
+    shopLocationId: row.shopLocationId,
+    locationCode: row.shopLocation?.locationCode || "",
+    locationName: row.shopLocation?.locationName || "",
+    csvVersion: row.csvVersion,
+    trigger: row.trigger || "",
+    status: row.status,
+    lowCount: Number(row.lowCount || 0),
+    tokenCount: Number(row.tokenCount || 0),
+    successCount: Number(row.successCount || 0),
+    failureCount: Number(row.failureCount || 0),
+    reason: row.reason || "",
+    createdAt: row.createdAt ? row.createdAt.toISOString() : null,
+    sentAt: row.sentAt ? row.sentAt.toISOString() : null,
+    notificationTime: (row.sentAt || row.createdAt || null)
+      ? (row.sentAt || row.createdAt).toISOString()
+      : null,
+  }));
+
+  const summary = mappedRows.reduce(
+    (acc, row) => {
+      acc.total += 1;
+      acc.totalLowCount += Number(row.lowCount || 0);
+      acc.totalSuccessCount += Number(row.successCount || 0);
+      acc.totalFailureCount += Number(row.failureCount || 0);
+      if (row.status === "sent") acc.sent += 1;
+      if (row.status === "failed") acc.failed += 1;
+      if (row.status === "skipped") acc.skipped += 1;
+      if (row.status === "pending") acc.pending += 1;
+      return acc;
+    },
+    {
+      total: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      pending: 0,
+      totalLowCount: 0,
+      totalSuccessCount: 0,
+      totalFailureCount: 0,
+    }
+  );
+
+  return res.json({
+    success: true,
+    filters: {
+      location: requestedLocationCode || "",
+      status: statusFilter || "all",
+      dateFrom: dateFromRaw || "",
+      dateTo: dateToRaw || "",
+    },
+    summary,
+    count: mappedRows.length,
+    rows: mappedRows,
+  });
 });
 
 router.post("/api/settings-auth", async (req, res) => {

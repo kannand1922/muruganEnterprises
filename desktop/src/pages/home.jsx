@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Play, Square, Clock, Calendar, Activity, FileText, AlertCircle, CheckCircle, XCircle, Printer } from 'lucide-react';
 import LogsTab from '../components/LogsTab';
 import AnalysisTab from '../components/AnalysisTab';
@@ -6,6 +6,7 @@ import Toast from '../components/Toast';
 import { cycleAPI } from '../service/api';
 import CycleTab from '../components/CycleTab';
 import PrinterTab from '../components/PrinterTab';
+import LowStockTab from '../components/LowStockTab';
 
 // Utility: Format date
 
@@ -17,7 +18,8 @@ const TabNavigation = ({ activeTab, onTabChange, disabled = false }) => {
     { id: 'cycle', label: 'Cycle', icon: Activity },
     { id: 'analysis', label: 'Analysis', icon: FileText },
     { id: 'logs', label: 'Logs', icon: Clock },
-    { id: 'printer', label: 'Printer', icon: Printer }
+    { id: 'printer', label: 'Printer', icon: Printer },
+    { id: 'low', label: 'Low Stock', icon: AlertCircle },
   ];
 
   const isDisabled = disabled;
@@ -53,6 +55,14 @@ const TabNavigation = ({ activeTab, onTabChange, disabled = false }) => {
   );
 };
 
+const isDashboardPath = () => {
+  if (typeof window === 'undefined') return false;
+  const pathname = String(window.location.pathname || '')
+    .trim()
+    .toLowerCase();
+  return pathname === '/' || pathname === '/dashboard';
+};
+
 
 
 
@@ -64,7 +74,7 @@ export default function CycleManagementApp() {
     if (typeof window === 'undefined') return 'cycle';
     const params = new URLSearchParams(window.location.search);
     const tab = String(params.get('tab') || '').trim().toLowerCase();
-    return ['cycle', 'analysis', 'logs', 'printer'].includes(tab) ? tab : 'cycle';
+    return ['cycle', 'analysis', 'logs', 'printer', 'low'].includes(tab) ? tab : 'cycle';
   };
 
   const setTabInUrl = (tab) => {
@@ -109,7 +119,7 @@ export default function CycleManagementApp() {
     setToast({ message, type });
   };
 
-  const fetchCurrentCycle = async () => {
+  const fetchCurrentCycle = useCallback(async () => {
     try {
       const result = await cycleAPI.getCurrentCycle();
       console.log("🚀 ~ fetchCurrentCycle ~ result:", result)
@@ -120,9 +130,9 @@ export default function CycleManagementApp() {
     } catch (error) {
       console.error('Error fetching current cycle:', error);
     }
-  };
+  }, []);
 
-  const fetchAllCycles = async () => {
+  const fetchAllCycles = useCallback(async () => {
     setLoading(true);
     try {
       const result = await cycleAPI.getAllCycles();
@@ -134,9 +144,9 @@ export default function CycleManagementApp() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchMissingBarcodes = async () => {
+  const fetchMissingBarcodes = useCallback(async () => {
     setMissingBarcodeLoading(true);
     setMissingBarcodeError(null);
     try {
@@ -162,9 +172,9 @@ export default function CycleManagementApp() {
     } finally {
       setMissingBarcodeLoading(false);
     }
-  };
+  }, []);
 
-  const fetchNilStock = async () => {
+  const fetchNilStock = useCallback(async () => {
     setNilStockLoading(true);
     setNilStockError(null);
     try {
@@ -186,7 +196,7 @@ export default function CycleManagementApp() {
     } finally {
       setNilStockLoading(false);
     }
-  };
+  }, []);
   // const fetchOperators = async () => {
   //   try {
   //     const result = await cycleAPI.getOperators();
@@ -231,31 +241,73 @@ export default function CycleManagementApp() {
   //   }
   // };
 
-  const refreshData = () => {
+  const refreshData = useCallback(() => {
     fetchCurrentCycle();
     fetchAllCycles();
     fetchMissingBarcodes();
     fetchNilStock();
     // fetchBrandsStatus();
-  };
+  }, [fetchAllCycles, fetchCurrentCycle, fetchMissingBarcodes, fetchNilStock]);
+
+  const triggerDashboardRefresh = useCallback(() => {
+    if (!isDashboardPath()) return;
+    refreshData();
+  }, [refreshData]);
+
+  const closeMissingBarcodeModal = useCallback(() => {
+    setShowMissingBarcodeModal(false);
+    triggerDashboardRefresh();
+  }, [triggerDashboardRefresh]);
+
+  const closeNilStockModal = useCallback(() => {
+    setShowNilStockModal(false);
+    triggerDashboardRefresh();
+  }, [triggerDashboardRefresh]);
 
   useEffect(() => {
     // fetchOperators();
     refreshData();
-  }, []);
+  }, [refreshData]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handlePopState = () => {
       setActiveTab(getTabFromUrl());
+      triggerDashboardRefresh();
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  }, [triggerDashboardRefresh]);
 
   useEffect(() => {
     setTabInUrl(activeTab);
   }, [activeTab]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        triggerDashboardRefresh();
+      }
+    };
+    const handleFocus = () => {
+      triggerDashboardRefresh();
+    };
+    const handlePageShow = () => {
+      triggerDashboardRefresh();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('pageshow', handlePageShow);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('pageshow', handlePageShow);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [triggerDashboardRefresh]);
 
   // Check brands status periodically
   // useEffect(() => {
@@ -420,6 +472,9 @@ export default function CycleManagementApp() {
             activeTab={activeTab} 
             onTabChange={(tab) => {
               setActiveTab(tab);
+              if (tab === 'cycle') {
+                triggerDashboardRefresh();
+              }
             }}
             disabled={false}
           />
@@ -451,6 +506,12 @@ export default function CycleManagementApp() {
                   selectedOperator={selectedOperator}
                 />
               )}
+              {activeTab === 'low' && (
+                <LowStockTab
+                  onRefresh={refreshData}
+                  showToast={showToast}
+                />
+              )}
             </>
           </div>
         </div>
@@ -475,7 +536,7 @@ export default function CycleManagementApp() {
                 </p>
               </div>
               <button
-                onClick={() => setShowMissingBarcodeModal(false)}
+                onClick={closeMissingBarcodeModal}
                 className="text-gray-500 hover:text-gray-800 font-semibold"
               >
                 Close
@@ -563,7 +624,7 @@ export default function CycleManagementApp() {
                 </p>
               </div>
               <button
-                onClick={() => setShowNilStockModal(false)}
+                onClick={closeNilStockModal}
                 className="text-gray-500 hover:text-gray-800 font-semibold"
               >
                 Close

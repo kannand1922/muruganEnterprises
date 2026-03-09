@@ -12,6 +12,13 @@ const {
   getMasterMaxAgeMinutes,
   formatTimestampIST,
 } = require("../services/masterStatus");
+const { sendPushNotification } = require("../services/fcmPush");
+const {
+  evaluateLowStock,
+  getLocationLowStockSettings,
+  saveLocationLowStockSettings,
+  runLowStockCheckAndNotify,
+} = require("../services/lowStockAlerts");
 
 const router = express.Router();
 
@@ -34,6 +41,32 @@ function toIntOrNull(value) {
 function parseId(rawId) {
   const id = Number(rawId);
   return Number.isFinite(id) && id > 0 ? Math.trunc(id) : null;
+}
+
+function parseOptionalPositiveInt(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.trunc(parsed);
+}
+
+function parseOptionalBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "y", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function parseDateBoundary(rawValue, endOfDay = false) {
+  const value = String(rawValue || "").trim();
+  if (!value) return null;
+  const parsed = new Date(
+    `${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`
+  );
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
 }
 
 function parsePrinterPort(value) {
@@ -80,6 +113,7 @@ function mapLocationPayload(body) {
     locationType: toNullableText(body.locationType),
     locationColor: normalizedColor || "#2563eb",
     sortOrder: toIntOrNull(body.sortOrder) ?? 0,
+    lowStockNotificationsEnabled: parseOptionalBoolean(body.lowStockNotificationsEnabled, true),
   };
 }
 
@@ -88,12 +122,17 @@ function mapPrinterPayload(body) {
     name: String(body.name || "").trim(),
     ipAddress: String(body.ipAddress || "").trim(),
     port: parsePrinterPort(body.port),
+    defaultPrinter: parseOptionalBoolean(body.defaultPrinter, false),
   };
 }
 
-function mapPhonePayload(body) {
+function mapPhonePayload(body, existing = null) {
   return {
     name: String(body.name || "").trim(),
+    lowStockNotificationsEnabled: parseOptionalBoolean(
+      body.lowStockNotificationsEnabled,
+      existing?.lowStockNotificationsEnabled ?? true
+    ),
   };
 }
 
@@ -111,6 +150,345 @@ router.post("/settings-auth", async (req, res) => {
       verified: true,
       source: result.source,
     },
+  });
+});
+
+router.post("/push/send", async (req, res) => {
+  const token = String(req.body?.token || "").trim();
+  const title = String(req.body?.title || "").trim();
+  const body = String(req.body?.body || "").trim();
+  const dryRun = Boolean(req.body?.dryRun);
+  const data = req.body?.data;
+
+  if (!token) {
+    return res.status(400).json({ success: false, message: "token is required" });
+  }
+
+  if (data !== undefined && (typeof data !== "object" || data === null || Array.isArray(data))) {
+    return res.status(400).json({ success: false, message: "data must be an object with key/value pairs" });
+  }
+
+  try {
+    const result = await sendPushNotification({ token, title, body, data, dryRun });
+    return res.json({
+      success: true,
+      data: {
+        token,
+        dryRun,
+        messageId: result.messageId,
+      },
+    });
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
+    const message = error instanceof Error ? error.message : "Failed to send push notification";
+    const clientErrorCodes = new Set([
+      "messaging/invalid-registration-token",
+      "messaging/invalid-argument",
+      "messaging/registration-token-not-registered",
+      "messaging/invalid-recipient",
+    ]);
+    const statusCode = code && clientErrorCodes.has(code) ? 400 : 500;
+    return res.status(statusCode).json({
+      success: false,
+      message,
+      code,
+    });
+  }
+});
+
+router.post("/push/register-token", async (req, res) => {
+  const token = String(req.body?.token || "").trim();
+  const phoneId = parseOptionalPositiveInt(req.body?.phoneId);
+  const shopLocationId = parseOptionalPositiveInt(req.body?.shopLocationId);
+  const active = parseOptionalBoolean(req.body?.active, true);
+
+  if (!token) {
+    return res.status(400).json({ success: false, message: "token is required" });
+  }
+
+  if (phoneId) {
+    const phone = await prisma.phone.findUnique({ where: { id: phoneId } });
+    if (!phone) {
+      return res.status(404).json({ success: false, message: "Phone not found" });
+    }
+  }
+
+  if (shopLocationId) {
+    const location = await prisma.shopLocation.findUnique({ where: { id: shopLocationId } });
+    if (!location) {
+      return res.status(404).json({ success: false, message: "Shop location not found" });
+    }
+  }
+
+  const row = await prisma.fcmDeviceToken.upsert({
+    where: { token },
+    create: {
+      token,
+      phoneId: phoneId || null,
+      shopLocationId: shopLocationId || null,
+      active,
+      lastSeenAt: new Date(),
+    },
+    update: {
+      phoneId: phoneId || null,
+      shopLocationId: shopLocationId || null,
+      active,
+      lastSeenAt: new Date(),
+    },
+  });
+
+  return res.json({ success: true, data: row });
+});
+
+router.get("/push/tokens", async (req, res) => {
+  const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
+  const activeOnly = parseOptionalBoolean(req.query.activeOnly, true);
+
+  const rows = await prisma.fcmDeviceToken.findMany({
+    where: {
+      ...(shopLocationId ? { shopLocationId } : {}),
+      ...(activeOnly ? { active: true } : {}),
+    },
+    orderBy: [{ id: "asc" }],
+  });
+  return res.json({ success: true, count: rows.length, rows });
+});
+
+router.get("/low-stock/settings/:shopLocationId", async (req, res) => {
+  const shopLocationId = parseId(req.params.shopLocationId);
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "Invalid shop location id" });
+  }
+
+  try {
+    const data = await getLocationLowStockSettings(shopLocationId);
+    return res.json({ success: true, data });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to load low stock settings";
+    const statusCode = message.toLowerCase().includes("not found") ? 404 : 500;
+    return res.status(statusCode).json({ success: false, message });
+  }
+});
+
+router.put("/low-stock/settings/:shopLocationId", async (req, res) => {
+  const shopLocationId = parseId(req.params.shopLocationId);
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "Invalid shop location id" });
+  }
+
+  const location = await prisma.shopLocation.findUnique({ where: { id: shopLocationId } });
+  if (!location) {
+    return res.status(404).json({ success: false, message: "Shop location not found" });
+  }
+
+  try {
+    await saveLocationLowStockSettings(shopLocationId, req.body || {});
+    const notificationsEnabled = parseOptionalBoolean(
+      req.body?.notificationsEnabled,
+      location.lowStockNotificationsEnabled
+    );
+
+    const updatedLocation = await prisma.shopLocation.update({
+      where: { id: shopLocationId },
+      data: {
+        lowStockNotificationsEnabled: notificationsEnabled,
+      },
+    });
+    const latestSettings = await getLocationLowStockSettings(shopLocationId);
+
+    return res.json({
+      success: true,
+      data: {
+        ...latestSettings,
+        notificationsEnabled: updatedLocation.lowStockNotificationsEnabled,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to save low stock settings";
+    return res.status(400).json({ success: false, message });
+  }
+});
+
+router.get("/low-stock/products", async (req, res) => {
+  const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "shopLocationId is required" });
+  }
+
+  const snapshot = await evaluateLowStock({
+    shopLocationIds: [shopLocationId],
+    onlyEnabledLocations: false,
+    includeTokens: false,
+  });
+  const location = snapshot.locations[0];
+
+  if (!location) {
+    return res.status(404).json({ success: false, message: "Shop location not found" });
+  }
+
+  return res.json({
+    success: true,
+    generatedAt: snapshot.generatedAt,
+    data: {
+      shopLocationId: location.shopLocationId,
+      locationName: location.locationName,
+      locationCode: location.locationCode,
+      notificationsEnabled: location.notificationsEnabled,
+      generalThresholdBottles: location.generalThresholdBottles,
+      lowCount: location.lowCount,
+      rows: location.lowRows,
+    },
+  });
+});
+
+router.get("/low-stock/overview", async (req, res) => {
+  const snapshot = await evaluateLowStock({
+    onlyEnabledLocations: false,
+    includeTokens: false,
+  });
+
+  return res.json({
+    success: true,
+    generatedAt: snapshot.generatedAt,
+    enabledLocationCount: snapshot.locationCount,
+    locationsWithLowStock: snapshot.locationsWithLowStock,
+    totalLowProducts: snapshot.totalLowProducts,
+    rows: snapshot.locations.map((row) => ({
+      shopLocationId: row.shopLocationId,
+      locationCode: row.locationCode,
+      locationName: row.locationName,
+      generalThresholdBottles: row.generalThresholdBottles,
+      lowCount: row.lowCount,
+    })),
+  });
+});
+
+router.post("/low-stock/check-now", async (req, res) => {
+  const shopLocationId = parseOptionalPositiveInt(req.body?.shopLocationId);
+  const dryRun = parseOptionalBoolean(req.body?.dryRun, false);
+  const forceResend = parseOptionalBoolean(req.body?.forceResend, false);
+
+  const result = await runLowStockCheckAndNotify({
+    shopLocationIds: shopLocationId ? [shopLocationId] : null,
+    dryRun,
+    trigger: "manual_api",
+    enforceCsvVersionOnce: !forceResend,
+  });
+
+  return res.json(result);
+});
+
+router.get("/low-stock/notifications", async (req, res) => {
+  const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
+  const statusFilter = String(req.query.status || "").trim().toLowerCase();
+  const validStatuses = new Set(["pending", "sent", "failed", "skipped"]);
+  const dateFromRaw = String(req.query.dateFrom || "").trim();
+  const dateToRaw = String(req.query.dateTo || "").trim();
+  const dateFrom = dateFromRaw ? parseDateBoundary(dateFromRaw, false) : null;
+  const dateTo = dateToRaw ? parseDateBoundary(dateToRaw, true) : null;
+
+  if (dateFromRaw && !dateFrom) {
+    return res.status(400).json({ success: false, message: "Invalid dateFrom" });
+  }
+  if (dateToRaw && !dateTo) {
+    return res.status(400).json({ success: false, message: "Invalid dateTo" });
+  }
+  if (dateFrom && dateTo && dateTo.getTime() < dateFrom.getTime()) {
+    return res.status(400).json({
+      success: false,
+      message: "dateTo must be greater than or equal to dateFrom",
+    });
+  }
+  if (statusFilter && statusFilter !== "all" && !validStatuses.has(statusFilter)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid status. Use all, pending, sent, failed, or skipped",
+    });
+  }
+
+  const where = {
+    ...(shopLocationId ? { shopLocationId } : {}),
+    ...(statusFilter && statusFilter !== "all" ? { status: statusFilter } : {}),
+    ...(dateFrom || dateTo
+      ? {
+          createdAt: {
+            ...(dateFrom ? { gte: dateFrom } : {}),
+            ...(dateTo ? { lte: dateTo } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const rowsFromDb = await prisma.lowStockNotificationRun.findMany({
+    where,
+    include: {
+      shopLocation: {
+        select: {
+          id: true,
+          locationCode: true,
+          locationName: true,
+        },
+      },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: 500,
+  });
+
+  const rows = rowsFromDb.map((row) => ({
+    id: row.id,
+    shopLocationId: row.shopLocationId,
+    locationCode: row.shopLocation?.locationCode || "",
+    locationName: row.shopLocation?.locationName || "",
+    csvVersion: row.csvVersion,
+    trigger: row.trigger || "",
+    status: row.status,
+    lowCount: Number(row.lowCount || 0),
+    tokenCount: Number(row.tokenCount || 0),
+    successCount: Number(row.successCount || 0),
+    failureCount: Number(row.failureCount || 0),
+    reason: row.reason || "",
+    createdAt: row.createdAt ? row.createdAt.toISOString() : null,
+    sentAt: row.sentAt ? row.sentAt.toISOString() : null,
+    notificationTime: (row.sentAt || row.createdAt || null)
+      ? (row.sentAt || row.createdAt).toISOString()
+      : null,
+  }));
+
+  const summary = rows.reduce(
+    (acc, row) => {
+      acc.total += 1;
+      acc.totalLowCount += Number(row.lowCount || 0);
+      acc.totalSuccessCount += Number(row.successCount || 0);
+      acc.totalFailureCount += Number(row.failureCount || 0);
+      if (row.status === "sent") acc.sent += 1;
+      if (row.status === "failed") acc.failed += 1;
+      if (row.status === "skipped") acc.skipped += 1;
+      if (row.status === "pending") acc.pending += 1;
+      return acc;
+    },
+    {
+      total: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      pending: 0,
+      totalLowCount: 0,
+      totalSuccessCount: 0,
+      totalFailureCount: 0,
+    }
+  );
+
+  return res.json({
+    success: true,
+    filters: {
+      shopLocationId: shopLocationId || null,
+      status: statusFilter || "all",
+      dateFrom: dateFromRaw || "",
+      dateTo: dateToRaw || "",
+    },
+    summary,
+    count: rows.length,
+    rows,
   });
 });
 
@@ -212,6 +590,10 @@ router.put("/shop-locations/:id", async (req, res) => {
   const existing = await prisma.shopLocation.findUnique({ where: { id } });
   if (!existing) {
     return res.status(404).json({ success: false, message: "Location not found" });
+  }
+
+  if (req.body?.lowStockNotificationsEnabled === undefined) {
+    payload.lowStockNotificationsEnabled = existing.lowStockNotificationsEnabled;
   }
 
   const duplicateCode = await prisma.shopLocation.findUnique({ where: { locationCode: payload.locationCode } });
@@ -343,7 +725,7 @@ router.put("/phones/:id", async (req, res) => {
     return res.status(404).json({ success: false, message: "Phone not found" });
   }
 
-  const payload = mapPhonePayload(req.body || {});
+  const payload = mapPhonePayload(req.body || {}, existing);
   if (!payload.name) {
     return res.status(400).json({ success: false, message: "name is required" });
   }
@@ -404,7 +786,15 @@ router.post("/printers", async (req, res) => {
     return res.status(409).json({ success: false, message: "Printer IP already exists" });
   }
 
-  const row = await prisma.printer.create({ data: payload });
+  const row = await prisma.$transaction(async (tx) => {
+    if (payload.defaultPrinter) {
+      await tx.printer.updateMany({
+        where: { defaultPrinter: true },
+        data: { defaultPrinter: false },
+      });
+    }
+    return tx.printer.create({ data: payload });
+  });
   return res.json({ success: true, data: row });
 });
 
@@ -440,7 +830,15 @@ router.put("/printers/:id", async (req, res) => {
     return res.status(409).json({ success: false, message: "Printer IP already exists" });
   }
 
-  const row = await prisma.printer.update({ where: { id }, data: payload });
+  const row = await prisma.$transaction(async (tx) => {
+    if (payload.defaultPrinter) {
+      await tx.printer.updateMany({
+        where: { defaultPrinter: true, id: { not: id } },
+        data: { defaultPrinter: false },
+      });
+    }
+    return tx.printer.update({ where: { id }, data: payload });
+  });
   return res.json({ success: true, data: row });
 });
 
@@ -465,7 +863,8 @@ router.get("/master-products", async (req, res) => {
   try {
     const query = String(req.query.query || "");
     const limit = Number(req.query.limit || 50);
-    const rows = await searchMasterProducts(query, limit);
+    const includeAll = String(req.query.includeAll || "").trim().toLowerCase() === "true";
+    const rows = await searchMasterProducts(query, limit, { includeAll });
     return res.json({ success: true, count: rows.length, rows, sourceFile: masterFilePath });
   } catch (error) {
     return res

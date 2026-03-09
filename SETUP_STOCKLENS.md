@@ -102,6 +102,27 @@ npm run dev
 
 Runs on `http://localhost:3100`.
 
+### Optional: Auto-restart backend on crash (1s) + on file change
+
+Use PM2 for crash recovery:
+
+```bash
+cd server
+npm install
+npm run pm2:start
+```
+
+This PM2 config also watches backend files and auto-restarts when code/config changes.
+
+Useful PM2 commands:
+
+```bash
+npm run pm2:logs
+npm run pm2:restart
+npm run pm2:stop
+npm run pm2:delete
+```
+
 ### Terminal 2 (frontend)
 
 ```bash
@@ -175,6 +196,7 @@ npm install -D @capacitor/cli @capacitor/android
 npm install
 
 npm run build
-npx cap add android
+# Run this only the first time, when `android/` does not exist yet:
+# npx cap add android
 npx cap sync android
 npx cap open android

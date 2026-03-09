@@ -125,6 +125,53 @@ export const cycleAPI = {
     return response.json();
   },
 
+  getLowStockList: async ({
+    location = '',
+    notificationsOnly = false,
+    search = '',
+    ruleType = '',
+    pack = '',
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (location) params.append('location', location);
+    if (notificationsOnly) params.append('notificationsOnly', 'true');
+    if (search) params.append('search', search);
+    if (ruleType) params.append('ruleType', ruleType);
+    if (pack) params.append('pack', pack);
+    const query = params.toString();
+    const response = await fetch(
+      `${API_BASE_URL}/api/low-stock/list${query ? `?${query}` : ''}`
+    );
+    return response.json();
+  },
+
+  checkLowStockNow: async ({ location = '', dryRun = false, forceResend = false } = {}) => {
+    const response = await fetch(`${API_BASE_URL}/api/low-stock/check-now`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ location, dryRun, forceResend }),
+    });
+    return response.json();
+  },
+
+  getLowStockNotifications: async ({
+    location = '',
+    status = 'all',
+    dateFrom = '',
+    dateTo = '',
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (location) params.append('location', location);
+    if (status) params.append('status', status);
+    if (dateFrom) params.append('dateFrom', dateFrom);
+    if (dateTo) params.append('dateTo', dateTo);
+    const query = params.toString();
+    const response = await fetch(
+      `${API_BASE_URL}/api/low-stock/notifications${query ? `?${query}` : ''}`
+    );
+    return response.json();
+  },
+
   printHtmlReport: async ({ printerIP, htmlContent, jobLabel, copies = 1, port }) => {
     const response = await fetch(`${API_BASE_URL}/api/print/html`, {
       method: 'POST',
