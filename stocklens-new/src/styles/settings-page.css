@@ -1,0 +1,763 @@
+/* Settings — GPay minimal theme */
+
+.settings-page-content {
+  --background: var(--color-bg);
+}
+
+.settings-config-card {
+  margin: 0 0 16px 0;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  overflow: hidden;
+}
+
+.settings-config-card ion-card-header {
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.settings-config-card ion-card-title {
+  color: var(--color-text-primary);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.settings-config-card ion-item {
+  --background: var(--color-bg);
+  --border-color: var(--color-border);
+  --padding-start: 0;
+  --inner-padding-end: 0;
+}
+
+.settings-config-card ion-input,
+.settings-config-card ion-select {
+  --background: var(--color-bg-subtle);
+  --padding-start: 12px;
+  --padding-end: 12px;
+  border-radius: 8px;
+  border: 1.5px solid transparent;
+  margin-top: 8px;
+  font-size: 14px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.settings-config-card ion-input:focus-within,
+.settings-config-card ion-select:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.15);
+  --background: var(--color-bg);
+}
+
+.settings-actions {
+  margin-top: 18px;
+}
+
+.settings-actions ion-button {
+  --border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.settings-actions ion-button:not([fill="outline"]) {
+  --background: var(--color-accent);
+  --background-activated: var(--color-accent-dark);
+  --background-hover: #1669d1;
+  --color: var(--color-text-inverse);
+}
+
+.settings-actions ion-button[fill="outline"] {
+  --border-width: 1.5px;
+  --border-color: var(--color-border);
+  --color: var(--color-text-secondary);
+  --background: transparent;
+  --background-hover: var(--color-bg-subtle);
+  --background-activated: var(--color-bg-overlay);
+}
+
+.settings-actions-inline {
+  display: flex;
+  gap: 12px;
+}
+
+.settings-menu-grid {
+  display: grid;
+  gap: 0;
+}
+
+.settings-menu-button {
+  --background: var(--color-bg);
+  --border-radius: 0;
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  text-transform: none;
+  justify-content: flex-start;
+  min-height: 72px;
+  transition: background var(--transition-fast);
+}
+
+.settings-menu-button:last-child {
+  border-bottom: none;
+}
+
+.settings-menu-button:hover {
+  --background: var(--color-bg-subtle);
+}
+
+.settings-menu-button:active {
+  transform: scale(0.995);
+}
+
+.settings-menu-content {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.settings-menu-icon-wrap {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--color-bg-subtle);
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+
+.settings-menu-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 4px;
+}
+
+.settings-menu-text strong {
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settings-menu-text span {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.settings-row-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: 10px;
+}
+
+.settings-list-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-list-item p {
+  margin: 4px 0 0 0;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.settings-selected-summary {
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
+}
+
+.settings-inline-fields {
+  margin-top: 10px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.settings-color-input-wrap {
+  width: 100%;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.settings-color-picker {
+  width: 48px;
+  height: 38px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  padding: 2px;
+  cursor: pointer;
+}
+
+.settings-color-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  display: inline-block;
+  margin-left: 10px;
+}
+
+.settings-token-textarea {
+  --background: var(--color-bg-subtle);
+  --padding-start: 12px;
+  --padding-end: 12px;
+  --padding-top: 10px;
+  --padding-bottom: 10px;
+  border-radius: 8px;
+  border: 1.5px solid var(--color-border);
+  margin-top: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Settings badges — text color only, no colored bg */
+.settings-config-card ion-badge[color="success"] {
+  --background: var(--color-bg-subtle);
+  --color: var(--color-success);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+}
+
+.settings-config-card ion-badge[color="medium"] {
+  --background: var(--color-bg-subtle);
+  --color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+}
+
+/* Low stock pack threshold compact layout */
+.low-stock-pack-rules {
+  margin-top: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--color-bg);
+}
+
+.low-stock-pack-header,
+.low-stock-pack-row {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.low-stock-pack-header {
+  background: var(--color-bg-subtle);
+  border-bottom: 1px solid var(--color-border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.low-stock-pack-row {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.low-stock-pack-row:last-child {
+  border-bottom: none;
+}
+
+.low-stock-pack-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.low-stock-pack-threshold-input {
+  margin-top: 0 !important;
+}
+
+/* Low stock product threshold compact layout */
+.low-stock-product-rules {
+  margin-top: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--color-bg);
+}
+
+.low-stock-product-header,
+.low-stock-product-row {
+  display: grid;
+  grid-template-columns: 1fr 110px 78px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.low-stock-product-header {
+  background: var(--color-bg-subtle);
+  border-bottom: 1px solid var(--color-border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.low-stock-product-header-action {
+  text-align: right;
+}
+
+.low-stock-product-row {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.low-stock-product-row:last-child {
+  border-bottom: none;
+}
+
+.low-stock-product-code-input,
+.low-stock-product-threshold-input {
+  margin-top: 0 !important;
+}
+
+.low-stock-product-remove-button {
+  margin: 0;
+  justify-self: end;
+  --padding-start: 4px;
+  --padding-end: 4px;
+  min-height: 28px;
+  font-size: 12px;
+}
+
+.low-stock-product-empty {
+  padding: 12px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.low-stock-product-add-button {
+  margin-top: 10px;
+}
+
+/* Low stock page revamp layout */
+.low-stock-alerts-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.low-stock-loading-note {
+  margin-bottom: 2px;
+  font-size: 13px;
+}
+
+.low-stock-overview-card .settings-config-card ion-card-content {
+  padding-top: 10px;
+}
+
+.low-stock-card-copy {
+  display: block;
+  margin-top: 12px;
+  color: var(--color-text-secondary);
+}
+
+.low-stock-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.low-stock-kpi {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-subtle);
+  padding: 10px 12px;
+}
+
+.low-stock-kpi-label {
+  display: block;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 4px;
+}
+
+.low-stock-kpi-value {
+  color: var(--color-text-primary);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.low-stock-location-pills {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.low-stock-location-pill {
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  padding: 7px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.low-stock-location-pill.active {
+  border-color: var(--color-accent);
+  background: rgba(26, 115, 232, 0.08);
+}
+
+.low-stock-location-pill-name {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.low-stock-location-pill-count {
+  min-width: 20px;
+  text-align: center;
+  border-radius: 999px;
+  background: var(--color-bg-subtle);
+  padding: 2px 6px;
+}
+
+.low-stock-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.low-stock-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.low-stock-field-label {
+  margin-bottom: 6px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.low-stock-switch-row {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--color-bg-subtle);
+}
+
+.low-stock-switch-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.low-stock-switch-subtitle {
+  margin-top: 2px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.low-stock-priority-note {
+  display: block;
+  margin-top: 10px;
+  color: var(--color-text-secondary);
+}
+
+.low-stock-primary-actions {
+  margin-top: 12px;
+}
+
+.low-stock-manage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.low-stock-manage-card {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-subtle);
+  padding: 14px;
+}
+
+.low-stock-manage-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.low-stock-manage-copy {
+  margin-top: 6px;
+  margin-bottom: 14px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.low-stock-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.low-stock-card-header-actions {
+  margin-left: auto;
+}
+
+.low-stock-rule-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.low-stock-rule-panel h3 {
+  margin: 0 0 4px 0;
+  font-size: 14px;
+  color: var(--color-text-primary);
+}
+
+.low-stock-rule-panel ion-note {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.low-stock-results-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.low-stock-inline-actions {
+  margin-top: 0;
+}
+
+.low-stock-page-actions {
+  flex-wrap: wrap;
+}
+
+.low-stock-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.low-stock-status-item {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-subtle);
+  padding: 12px;
+}
+
+.low-stock-status-item strong {
+  display: block;
+  color: var(--color-text-primary);
+  font-size: 18px;
+}
+
+.low-stock-status-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.low-stock-searchbar {
+  margin-top: 12px;
+}
+
+.low-stock-filter-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.low-stock-results-meta {
+  margin-top: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.low-stock-history-card {
+  margin-top: 12px;
+}
+
+.low-stock-history-filters {
+  display: grid;
+  grid-template-columns: 140px 1fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.low-stock-history-actions {
+  margin-top: 0;
+}
+
+.low-stock-history-summary {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.low-stock-history-list {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.low-stock-history-row {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-subtle);
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.low-stock-history-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.low-stock-history-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.low-stock-result-list {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.low-stock-result-row {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-subtle);
+  padding: 10px 12px;
+}
+
+.low-stock-result-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.low-stock-result-head strong {
+  font-size: 14px;
+  color: var(--color-text-primary);
+}
+
+.low-stock-result-meta {
+  margin-top: 4px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 920px) {
+  .low-stock-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .low-stock-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .low-stock-rule-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .low-stock-manage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .low-stock-card-header-actions {
+    margin-left: 0;
+  }
+
+  .low-stock-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .low-stock-history-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .low-stock-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .low-stock-results-meta {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 560px) {
+  .low-stock-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .low-stock-location-pill-name {
+    max-width: 120px;
+  }
+
+  .low-stock-pack-header,
+  .low-stock-pack-row {
+    grid-template-columns: 1fr 96px;
+  }
+
+  .low-stock-product-header,
+  .low-stock-product-row {
+    grid-template-columns: 1fr 96px 68px;
+  }
+}
+
+/* Location cards — shop color as left border */
+.locations-list .location-card {
+  border-left: 3px solid var(--shop-color, var(--color-accent));
+}

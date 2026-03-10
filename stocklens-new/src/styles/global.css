@@ -1,0 +1,160 @@
+@import url("https://fonts.googleapis.com/css2?family=Aldrich&family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap");
+
+/* StockLens — GPay-inspired minimal design system */
+:root {
+  --font-display: "Aldrich", "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-body: "Aldrich", "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-body);
+  --ion-font-family: var(--font-body);
+  font-size: 14px;
+
+  /* Base colors */
+  --color-bg: #ffffff;
+  --color-bg-subtle: #f8fafc;
+  --color-bg-card: #ffffff;
+  --color-bg-overlay: #f1f5f9;
+
+  /* Text */
+  --color-text-primary: #0a0a0a;
+  --color-text-secondary: #222222;
+  --color-text-muted: #3d3d3d;
+  --color-text-inverse: #ffffff;
+
+  /* Borders */
+  --color-border: #e8e8e8;
+  --color-border-strong: #d0d0d0;
+
+  /* Accent — modern indigo */
+  --color-accent: #4f46e5;
+  --color-accent-light: #e0e7ff;
+  --color-accent-dark: #4338ca;
+
+  /* Semantic — text/icon only, never backgrounds */
+  --color-success: #188038;
+  --color-warning: #e37400;
+  --color-danger: #d93025;
+
+  /* Shop color */
+  --shop-color: #4f46e5;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-smooth: 280ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Ionic overrides */
+  --ion-color-primary: #4f46e5;
+  --ion-color-primary-rgb: 79, 70, 229;
+  --ion-color-primary-contrast: #ffffff;
+  --ion-color-primary-shade: #4338ca;
+  --ion-color-primary-tint: #6366f1;
+}
+
+/* Base page background — always white */
+.main-page-content,
+.settings-page-content,
+.stock-entry-content,
+.nil-products-content,
+.fast-moving-content,
+.print-page-content,
+.verify-page-content {
+  --background: var(--color-bg);
+  transition: background var(--transition-smooth);
+}
+
+/* Typography */
+body {
+  font-family: var(--font-body);
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+body,
+ion-app,
+ion-page,
+ion-content,
+ion-item,
+ion-label,
+ion-text,
+ion-button,
+ion-input,
+ion-select,
+ion-searchbar,
+input,
+select,
+textarea,
+button,
+p,
+span,
+div,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-body);
+}
+
+/* Ionic content */
+ion-content {
+  --background: var(--color-bg);
+}
+
+.ion-padding {
+  --padding-start: 16px;
+  --padding-end: 16px;
+  --padding-top: 16px;
+  --padding-bottom: 16px;
+}
+
+/* Toast — GPay style (dark, minimal) */
+ion-toast {
+  --background: #111111;
+  --color: #ffffff;
+  --border-radius: 8px;
+  --box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  font-size: 13px;
+  --max-width: 340px;
+}
+
+ion-toast::part(container) {
+  margin: 0 16px 80px;
+}
+
+/* Ionic button color overrides — align with design system */
+ion-button[color="primary"] {
+  --background: var(--color-accent);
+  --background-activated: var(--color-accent-dark);
+  --background-hover: #4338ca;
+  --color: var(--color-text-inverse);
+}
+
+ion-button[color="dark"] {
+  --background: var(--color-text-primary);
+  --background-activated: #000000;
+  --background-hover: #000000;
+  --color: var(--color-text-inverse);
+}
+
+ion-button[color="danger"] {
+  --background: transparent;
+  --background-activated: #fff0ef;
+  --background-hover: #fff0ef;
+  --color: var(--color-danger);
+  --border-width: 1.5px;
+  --border-color: var(--color-border);
+}
+
+ion-button[color="success"] {
+  --background: var(--color-accent);
+  --background-activated: var(--color-accent-dark);
+  --background-hover: #4338ca;
+  --color: var(--color-text-inverse);
+}
+
+ion-button[color="medium"] {
+  --background: var(--color-bg-subtle);
+  --color: var(--color-text-secondary);
+}

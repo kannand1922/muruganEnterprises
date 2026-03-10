@@ -1,0 +1,108 @@
+/* Top App Bar — GPay minimal */
+.simple-header ion-toolbar {
+  --border-width: 0;
+  --background: var(--color-bg);
+  --color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  min-height: 56px;
+}
+
+.drawer-button,
+.toolbar-settings-button {
+  --background: transparent;
+  --color: var(--color-text-secondary);
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  font-size: 22px;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.drawer-button:hover,
+.toolbar-settings-button:hover {
+  --background: var(--color-bg-overlay);
+  --color: var(--color-text-primary);
+}
+
+.drawer-button:active,
+.toolbar-settings-button:active {
+  transform: scale(0.98);
+}
+
+.toolbar-center {
+  text-align: center;
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--color-text-primary);
+}
+
+.toolbar-location-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  min-height: 38px;
+  border: 1px solid var(--shop-color, var(--color-border));
+  border-radius: 999px;
+  background: var(--color-bg-subtle);
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
+}
+
+.toolbar-location-button:hover {
+  background: var(--color-bg-overlay);
+}
+
+.toolbar-location-button:active {
+  transform: scale(0.98);
+}
+
+.toolbar-location-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.connection-badge-holder {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  justify-content: center;
+  margin-right: 10px;
+}
+
+.status-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: inline-flex;
+  margin-left: 8px;
+  border: 2px solid var(--color-bg);
+  transition: box-shadow var(--transition-fast);
+}
+
+.status-dot.connected {
+  background: var(--color-success);
+}
+
+.status-dot.disconnected,
+.status-dot.idle {
+  background: var(--color-danger);
+}
+
+.status-dot.checking {
+  background: var(--color-warning);
+}
+
+.topbar-connection-holder {
+  min-width: 28px;
+  align-items: center;
+  justify-content: center;
+}
