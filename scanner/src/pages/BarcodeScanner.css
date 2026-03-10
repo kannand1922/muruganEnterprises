@@ -1,0 +1,1646 @@
+/* BarcodeScanner.css */
+
+:root {
+  --scanner-stat-font-size: 1.5rem;
+  --scanner-stat-label-font-size: 0.75rem;
+  --scanner-action-font-size: 1rem;
+  --scanner-icon-size: 26px;
+}
+
+body.barcode-scanner-active {
+  --ion-background-color: transparent !important;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* Scanner Active State */
+body.scanner-active {
+  --ion-background-color: transparent;
+}
+
+/* Ensure uniform IonContent padding so every section aligns */
+.scanner-content {
+  --padding-top: 18px;
+  --padding-bottom: 0px;
+  --padding-start: 0px;
+  --padding-end: 0px;
+  padding: 0px !important;
+  box-sizing: border-box;
+}
+
+/* Manual Entry Results */
+.manual-entry-results-list {
+  margin-top: 4px;
+}
+
+.manual-entry-results-list ion-list {
+  margin: 0;
+  padding: 0;
+  --padding-top: 0;
+  --padding-bottom: 0;
+}
+
+.manual-entry-results-list ion-item {
+  --inner-padding-top: 2px;
+  --inner-padding-bottom: 2px;
+  --inner-padding-start: 8px;
+  --inner-padding-end: 8px;
+  --min-height: 32px;
+  min-height: 32px;
+  margin: 0;
+}
+
+.manual-entry-results-list ion-item::part(native) {
+  padding: 0;
+  min-height: 32px;
+}
+
+.manual-entry-results-list ion-label h3 {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.2;
+}
+
+ion-modal.manual-pack-modal {
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.manual-pack-modal{
+  --height:130vh
+}
+ion-modal.manual-pack-modal::part(content) {
+  margin: calc(env(safe-area-inset-top) + 12px) auto 0;
+  width: min(600px, calc(100% - 24px));
+  border-radius: 0 0 16px 16px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+  height: 130vh;
+  max-height: calc(100% - env(safe-area-inset-top) - 24px);
+  overflow: hidden;
+}
+
+/* Status Card Styling */
+.status-card {
+  margin-bottom: 16px;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.stat-item {
+  text-align: center;
+  padding: 8px;
+}
+
+.stat-number {
+  font-size: var(--scanner-action-font-size);
+  font-weight: bold;
+  color: var(--ion-color-primary);
+  margin-bottom: 4px;
+}
+
+.stat-label {
+  font-size: var(--scanner-stat-label-font-size);
+  color: var(--ion-color-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Scanning Controls Card */
+.scanning-controls {
+  margin-bottom: 16px;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background: linear-gradient(135deg, var(--ion-color-success-tint), var(--ion-color-success));
+  color: white;
+}
+
+.scanning-controls ion-card-content {
+  padding: 12px;
+}
+
+.scanning-controls .stat-number {
+  color: white;
+}
+
+.scanning-controls .stat-label {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* Continuous Scanning Animation */
+.scanning-controls::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+  animation: scanningProgress 2s infinite;
+}
+
+@keyframes scanningProgress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* Items Card - Normal State */
+.items-card {
+  border-radius: 8px;
+  margin-bottom: 8px;
+  transition: all 0.3s ease;
+}
+
+/* Scanned Items Compact Layout */
+.scanned-items-card {
+  margin-bottom: 12px;
+}
+
+.scanned-items-content {
+  padding: 2px 4px 4px;
+}
+
+.scanned-items-header {
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.scanned-items-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.scanned-items-header-row h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.scanned-items-clear-btn {
+  --padding-start: 4px;
+  --padding-end: 4px;
+  font-size: 0.75rem;
+}
+
+
+.scanned-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.scanned-item {
+  --padding-start: 0;
+  --inner-padding-start: 0;
+  --inner-padding-end: 0;
+  --inner-padding-top: 0;
+  --inner-padding-bottom: 0;
+  /* --inner-padding-top: 4px;
+  --inner-padding-bottom: 4px;
+  --inner-padding-end: 0; */
+  border-radius: 12px;
+  --background: transparent;
+  --min-height: 28px;
+  min-height: 28px;
+  margin: 0;
+}
+
+.scanned-item + .scanned-item {
+  margin-top: 0;
+}
+
+.scanned-item::part(native) {
+  padding: 0;
+  min-height: 28px;
+}
+
+.scanned-item-label {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scanned-item-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1px;
+}
+
+.scanned-item-row.secondary {
+  flex-wrap: wrap;
+  gap: 1px;
+}
+
+.scanned-item-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #666666;
+  flex: 1;
+}
+
+.scanned-item-price {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #2dd36f;
+  white-space: nowrap;
+}
+
+.scanned-item-quantity {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.scanned-item-quantity-btn {
+  --padding-start: 0;
+  --padding-end: 0;
+}
+
+.scanned-item-quantity-btn::part(native) {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.scanned-item-quantity-btn[disabled]::part(native) {
+  opacity: 0.35;
+}
+
+.scanned-item-quantity-btn ion-icon {
+  font-size: 18px;
+}
+
+.scanned-item-quantity-value {
+  --padding-start: 6px;
+  --padding-end: 6px;
+  font-weight: 700;
+}
+
+.scanned-item-quantity-value::part(native) {
+  min-width: 44px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  font-size: 0.9rem;
+}
+
+.scanned-item-delete {
+  margin-left: auto;
+}
+
+.scanned-item-delete::part(native) {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+}
+
+.scanned-item-delete ion-icon {
+  font-size: 20px;
+}
+
+.scanned-item-divider {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.06);
+  margin: 2px 0 4px;
+}
+
+/* Items Card - Scanning Mode */
+.items-card.scanning-mode {
+  position: fixed !important;
+  top: 50% !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  height: 50% !important;
+  margin: 0 !important;
+  border-radius: 16px 16px 0 0 !important;
+  background: rgba(0, 0, 0, 0.95) !important;
+  --background: rgba(0, 0, 0, 0.95) !important;
+  z-index: 1000 !important;
+  overflow: hidden !important;
+}
+
+/* Items Card Header in Scanning Mode */
+.items-card.scanning-mode ion-card-header {
+  background: rgba(0, 0, 0, 0.95) !important;
+  --background: rgba(0, 0, 0, 0.95) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 12px 16px !important;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.items-card.scanning-mode ion-card-title {
+  color: white !important;
+  font-size: 16px !important;
+  font-weight: 600 !important;
+}
+
+/* Items Card Content in Scanning Mode */
+.items-card.scanning-mode ion-card-content {
+  background: transparent !important;
+  --background: transparent !important;
+  padding: 0 !important;
+  height: calc(100% - 60px) !important;
+  overflow-y: auto !important;
+}
+
+.items-card.scanning-mode .scanned-items-header {
+  border-bottom-color: rgba(255, 255, 255, 0.15);
+}
+
+.items-card.scanning-mode .scanned-items-header-row h3 {
+  color: #ffffff;
+}
+
+.items-card.scanning-mode .scanned-item {
+  margin: 0 8px;
+  background: rgba(255, 255, 255, 0.06) !important;
+  --background: transparent;
+}
+
+.items-card.scanning-mode .scanned-item-title {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.items-card.scanning-mode .scanned-item-divider {
+  background: rgba(255, 255, 255, 0.2);
+  margin: 2px 8px 8px;
+}
+
+.items-card.scanning-mode .scanned-item-quantity-btn::part(native),
+.items-card.scanning-mode .scanned-item-quantity-value::part(native),
+.items-card.scanning-mode .scanned-item-delete::part(native) {
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.items-card.scanning-mode .scanned-item-quantity-value::part(native) {
+  color: #ffffff;
+}
+
+/* List in Scanning Mode */
+.items-card.scanning-mode ion-list {
+  background: transparent !important;
+  --background: transparent !important;
+  padding: 4px 0 !important;
+}
+
+/* Item Content Styling */
+.item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  padding: 12px 0;
+}
+
+.item-row-1 {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.item-row-2 {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.item-row-3 {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.item-code {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.item-number {
+  background: var(--ion-color-primary);
+  color: white;
+  padding: 6px 10px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: bold;
+  min-width: 32px;
+  text-align: center;
+}
+
+.item-value {
+  font-family: 'Courier New', monospace;
+  font-weight: bold;
+  color: black;
+  background: var(--ion-color-light);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 16px;
+  word-break: break-all;
+  flex: 1;
+}
+
+.custom-button ion-icon {
+  font-size: 18px;
+}
+
+.item-time {
+  font-size: 14px;
+  color: var(--ion-color-medium);
+}
+
+.delete-btn {
+  --color: var(--ion-color-danger);
+  height: 36px;
+  width: 36px;
+}
+
+/* Barcode Item Styling */
+.barcode-item,
+.item-card {
+  border-radius: 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--ion-color-light);
+  --padding-start: 12px;
+  --padding-end: 12px;
+  --min-height: 80px;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  background: var(--ion-color-step-50);
+  --background: var(--ion-color-step-50);
+}
+
+/* Items in Scanning Mode */
+.items-card.scanning-mode .item-card,
+.items-card.scanning-mode .barcode-item {
+  background: rgba(255, 255, 255, 0.15) !important;
+  --background: rgba(255, 255, 255, 0.15) !important;
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  margin: 6px 16px 10px 16px !important;
+}
+
+/* Text Colors in Scanning Mode */
+.items-card.scanning-mode .item-number {
+  background: var(--ion-color-primary);
+  color: white;
+  font-size: 14px;
+}
+
+.items-card.scanning-mode .item-value {
+  background: rgba(255, 255, 255, 0.95) !important;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.items-card.scanning-mode .item-time {
+  color: rgba(255, 255, 255, 0.9) !important;
+  font-size: 14px;
+}
+
+.items-card.scanning-mode .qty-label {
+  color: white !important;
+  font-size: 14px;
+}
+
+.items-card.scanning-mode .qty-number {
+  color: var(--ion-color-primary) !important;
+  background: white !important;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+/* Clear All Button in Scanning Mode */
+.items-card.scanning-mode ion-button[color="danger"] {
+  --color: var(--ion-color-danger-tint) !important;
+}
+
+.barcode-item:hover,
+.item-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.barcode-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.barcode-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.barcode-value {
+  font-family: 'Courier New', monospace;
+  font-weight: bold;
+  color: var(--ion-color-dark);
+  background: var(--ion-color-light);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 14px;
+  word-break: break-all;
+}
+
+.barcode-time {
+  font-size: 12px;
+  color: var(--ion-color-medium);
+  margin: 0;
+}
+
+/* Quantity Section */
+.quantity-section {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.qty-label {
+  font-size: 14px;
+  color: var(--ion-color-medium);
+  font-weight: 600;
+}
+
+/* Quantity Controls Styling */
+.quantity-controls-inline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 24px;
+  padding: 2px;
+}
+
+.qty-btn {
+  --color: var(--ion-color-primary);
+  --background: transparent;
+  height: 32px;
+  width: 32px;
+  --border-radius: 16px;
+  margin: 0;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.qty-display-btn {
+  --color: var(--ion-color-primary);
+  --background: white;
+  height: 32px;
+  min-width: 42px;
+  --border-radius: 16px;
+  margin: 0 2px;
+}
+
+.qty-number {
+  font-weight: bold;
+  font-size: 16px;
+}
+
+.quantity-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 8px;
+  background: var(--ion-color-light);
+  border-radius: 20px;
+  padding: 4px;
+}
+
+.quantity-display {
+  min-width: 40px;
+  height: 32px;
+  --color: var(--ion-color-primary);
+  --background: white;
+  border-radius: 16px;
+  margin: 0 4px;
+}
+
+.quantity-number {
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.quantity-chip {
+  margin-left: 8px;
+  font-size: 12px;
+  height: 20px;
+}
+
+/* Item Actions */
+.item-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.item-actions ion-button {
+  --color: var(--ion-color-medium);
+  height: 32px;
+  width: 32px;
+}
+
+/* Quantity Popover Styling */
+.quantity-popover {
+  padding: 16px;
+  min-width: 250px;
+  background-color: white !important;
+  z-index: 99999
+}
+
+.quantity-popover-header {
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.quantity-popover-header h3 {
+  margin: 0;
+  color: var(--ion-color-primary);
+}
+
+.quantity-popover-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.quantity-input {
+  color: black;
+  --background: var(--ion-color-light);
+  --border-radius: 8px;
+  --padding-start: 16px;
+  --padding-end: 16px;
+  text-align: center;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.quantity-popover-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.quantity-popover-actions ion-button {
+  flex: 1;
+  height: 40px;
+}
+
+.barcode-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Action Buttons */
+.action-buttons {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--ion-background-color);
+  padding: 16px;
+  border-top: 1px solid var(--ion-color-light);
+  z-index: 100;
+}
+
+.action-btn {
+  height: 58px;
+  font-weight: 600;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  font-size: var(--scanner-action-font-size);
+}
+
+.scanner-content ion-fab-button ion-icon,
+.action-btn ion-icon {
+  font-size: var(--scanner-icon-size);
+}
+
+.action-btn:not(:disabled):hover {
+  transform: translateY(-2px);
+}
+
+/* Continuous Scanning Indicators */
+.action-btn[color="secondary"] {
+  position: relative;
+  overflow: hidden;
+}
+
+.action-btn[color="secondary"]:not(:disabled)::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  0% { left: -100%; }
+  100% { left: 100%; }
+}
+
+/* Empty State */
+.empty-state {
+  margin-top: 40px;
+  border-radius: 12px;
+  text-align: center;
+  transition: all 0.3s ease;
+}
+
+.empty-state:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+.empty-icon {
+  font-size: 64px;
+  color: var(--ion-color-medium);
+  margin-bottom: 16px;
+  animation: pulse 2s infinite;
+}
+
+.empty-state h2 {
+  color: var(--ion-color-dark);
+  margin-bottom: 8px;
+}
+
+.empty-state p {
+  color: var(--ion-color-medium);
+  margin-bottom: 0;
+}
+
+/* QR Modal Styling */
+.qr-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px;
+  height: 100%;
+  justify-content: center;
+}
+
+.qr-image-container {
+  background: white;
+  padding: 20px;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  margin-bottom: 24px;
+  transition: all 0.3s ease;
+}
+
+.qr-image-container:hover {
+  transform: scale(1.05);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.qr-image {
+  width: 300px;
+  height: 300px;
+  border-radius: 8px;
+}
+
+.qr-info {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.qr-info p {
+  margin: 8px 0;
+  color: var(--ion-color-medium);
+}
+
+.qr-actions {
+  width: 100%;
+  max-width: 300px;
+}
+
+.qr-action-btn {
+  margin-bottom: 12px;
+  height: 48px;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+}
+
+.qr-action-btn:hover {
+  transform: translateY(-2px);
+}
+
+/* Floating Action Button Enhancements */
+ion-fab-button {
+  transition: all 0.3s ease;
+  --box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+ion-fab-button:hover {
+  transform: scale(1.1);
+}
+
+ion-fab-button[color="danger"] {
+  animation: pulse 1s infinite;
+}
+
+/* Status Chip Enhancements */
+ion-chip {
+  transition: all 0.3s ease;
+}
+
+ion-chip[color="success"] {
+  animation: pulseGlow 2s infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { 
+    box-shadow: 0 0 5px var(--ion-color-success); 
+  }
+  50% { 
+    box-shadow: 0 0 20px var(--ion-color-success); 
+  }
+}
+
+/* Toast Enhancements */
+ion-toast {
+  --border-radius: 8px;
+  --box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Scanning Toast in Scanning Mode */
+.scanning-toast {
+  --background: rgba(0, 0, 0, 0.9) !important;
+  --color: white !important;
+}
+
+/* Loading States */
+.action-btn:disabled {
+  opacity: 0.5;
+  transform: none !important;
+}
+
+.action-btn[aria-label*="Generating"] {
+  position: relative;
+}
+
+.action-btn[aria-label*="Generating"]::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid transparent;
+  border-top: 2px solid currentColor;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+@keyframes spin {
+  0% { transform: translate(-50%, -50%) rotate(0deg); }
+  100% { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+/* Pulse Animation for Interactive Elements */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.05);
+  }
+}
+
+/* Quantity Control Animations */
+.quantity-controls ion-button {
+  transition: all 0.2s ease;
+}
+
+.quantity-controls ion-button:hover {
+  background: var(--ion-color-primary);
+  color: white;
+  transform: scale(1.1);
+}
+
+.quantity-controls ion-button:disabled {
+  opacity: 0.3;
+}
+
+/* Enhanced Badge Styling */
+ion-badge {
+  --background: var(--ion-color-primary);
+  --color: white;
+  font-weight: bold;
+  padding: 4px 8px;
+  border-radius: 12px;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  /* .scanned-items-content {
+    padding: 4px 6px 8px;
+  } */
+
+  .scanned-item-shell {
+    padding: 5px 8px;
+  }
+
+  .scanned-item-title-text {
+    font-size: 0.85rem;
+  }
+
+  .scanned-item-pack {
+    font-size: 0.65rem;
+  }
+
+  .scanned-item-price {
+    font-size: 0.82rem;
+  }
+  
+  .action-buttons {
+    padding: 12px;
+  }
+  
+  .qr-image {
+    width: 250px;
+    height: 250px;
+  }
+  
+  .qr-actions {
+    max-width: 250px;
+  }
+  
+  .action-btn {
+    font-size: var(--scanner-action-font-size);
+  }
+
+  .quantity-popover {
+    min-width: 200px;
+    padding: 12px;
+  }
+
+  .barcode-item,
+  .item-card {
+    --min-height: 90px;
+    flex-wrap: wrap;
+  }
+
+  .quantity-controls {
+    margin-top: 8px;
+    order: 3;
+  }
+
+  .barcode-actions {
+    order: 2;
+  }
+
+  .items-card.scanning-mode ion-card-header {
+    padding: 8px 12px !important;
+  }
+
+  .items-card.scanning-mode .item-card,
+  .items-card.scanning-mode .barcode-item {
+    margin: 4px 12px 8px 12px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .stat-number {
+    font-size: var(--scanner-action-font-size);
+  }
+  
+  .scanned-items-header-row h3 {
+    font-size: 0.85rem;
+  }
+
+  .scanned-item-shell {
+    padding: 5px 6px;
+  }
+
+  .scanned-item-row.secondary {
+    gap: px;
+  }
+
+  .scanned-item-title-text {
+    font-size: 0.5rem;
+  }
+
+  .scanned-item-pack {
+    font-size: 0.62rem;
+  }
+
+  .scanned-item-price {
+    font-size: 0.78rem;
+  }
+
+  .scanned-item-quantity-btn::part(native) {
+    width: 36px;
+    height: 36px;
+  }
+
+  .scanned-item-quantity-value::part(native) {
+    min-width: 34px;
+    height: 28px;
+    font-size: 0.78rem;
+  }
+
+  .scanned-item-delete::part(native) {
+    width: 32px;
+    height: 32px;
+  }
+  
+  .barcode-value {
+    font-size: 12px;
+  }
+  
+  .action-btn {
+    height: 44px;
+    font-size: var(--scanner-action-font-size);
+  }
+  
+  .qr-image {
+    width: 200px;
+    height: 200px;
+  }
+
+  .quantity-chip {
+    font-size: 10px;
+    height: 18px;
+  }
+
+  .quantity-controls {
+    gap: 2px;
+  }
+
+  .quantity-display {
+    min-width: 35px;
+    height: 28px;
+  }
+
+  .item-value {
+    font-size: 12px;
+    padding: 4px 8px;
+  }
+
+  .item-number {
+    font-size: 10px;
+    padding: 3px 6px;
+    min-width: 24px;
+  }
+}
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+  .status-card {
+    box-shadow: 0 2px 8px rgba(255, 255, 255, 0.1);
+  }
+  
+  .barcode-item,
+  .item-card {
+    border-color: var(--ion-color-dark);
+    background: var(--ion-color-step-100);
+    --background: var(--ion-color-step-100);
+  }
+  
+  .barcode-value,
+  .item-value {
+    background: var(--ion-color-dark);
+    color: var(--ion-color-light);
+  }
+  
+  .qr-image-container {
+    background: var(--ion-color-light);
+  }
+  
+  .scanning-controls {
+    background: linear-gradient(135deg, var(--ion-color-success-shade), var(--ion-color-success-tint));
+  }
+
+  .quantity-controls {
+    background: var(--ion-color-dark);
+  }
+
+  .quantity-display,
+  .qty-display-btn {
+    --background: var(--ion-color-step-100);
+  }
+
+  .quantity-popover {
+    background: var(--ion-background-color);
+  }
+}
+
+/* Accessibility Improvements */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Focus States for Accessibility */
+.action-btn:focus,
+.qr-action-btn:focus,
+ion-fab-button:focus,
+.quantity-controls ion-button:focus,
+.qty-btn:focus,
+.qty-display-btn:focus {
+  outline: 2px solid var(--ion-color-primary);
+  outline-offset: 2px;
+}
+
+/* High Contrast Mode */
+@media (prefers-contrast: high) {
+  .barcode-item,
+  .item-card {
+    border-width: 2px;
+  }
+  
+  .action-btn {
+    border-width: 2px;
+  }
+
+  .quantity-controls,
+  .quantity-controls-inline {
+    border: 2px solid var(--ion-color-primary);
+  }
+
+  .items-card.scanning-mode .item-card,
+  .items-card.scanning-mode .barcode-item {
+    border-width: 2px !important;
+  }
+}
+
+/* Enhanced Hover Effects */
+.barcode-item:hover .quantity-controls,
+.item-card:hover .quantity-controls-inline {
+  transform: scale(1.05);
+}
+
+.barcode-item:hover .quantity-chip,
+.item-card:hover .quantity-chip {
+  background: var(--ion-color-secondary);
+}
+
+/* Print Styles */
+@media print {
+  .action-buttons,
+  ion-fab,
+  .scanning-controls,
+  .quantity-controls,
+  .quantity-controls-inline,
+  .barcode-actions,
+  .item-actions {
+    display: none !important;
+  }
+  
+  .scanner-content {
+    --padding-bottom: 0;
+  }
+
+  .barcode-item,
+  .item-card {
+    break-inside: avoid;
+    margin-bottom: 16px;
+  }
+
+  .qr-image {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .items-card.scanning-mode {
+    position: relative !important;
+    height: auto !important;
+    background: white !important;
+  }
+}
+
+/* Scanner Active Background Transparency */
+body.barcode-scanner-active,
+body.barcode-scanner-active * {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* Make the entire app transparent */
+body.barcode-scanner-active .ion-page,
+body.barcode-scanner-active ion-app,
+body.barcode-scanner-active ion-router-outlet,
+body.barcode-scanner-active ion-content,
+body.barcode-scanner-active .ion-content,
+body.barcode-scanner-active .scanner-content {
+  background: transparent !important;
+  --background: transparent !important;
+  --ion-background-color: transparent !important;
+}
+
+body.barcode-scanner-active .scanner-content {
+  --padding-top: 0;
+  --padding-bottom: 0;
+  --padding-start: 0;
+  --padding-end: 0;
+  padding: 0 !important;
+}
+
+/* Make header semi-transparent but visible */
+body.barcode-scanner-active ion-header,
+body.barcode-scanner-active ion-toolbar {
+  background: rgba(255, 255, 255, 0.9) !important;
+  --background: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* Make cards semi-transparent EXCEPT items card in scanning mode */
+body.barcode-scanner-active ion-card:not(.scanning-mode),
+body.barcode-scanner-active .ion-card:not(.scanning-mode) {
+  background: rgba(255, 255, 255, 0.9) !important;
+  --background: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* Make buttons visible */
+body.barcode-scanner-active .action-buttons {
+  background: rgba(255, 255, 255, 0.95) !important;
+}
+
+/* Hide or make transparent all other elements */
+body.barcode-scanner-active ion-item:not(.item-card),
+body.barcode-scanner-active .ion-item:not(.item-card) {
+  background: transparent !important;
+  --background: transparent !important;
+}
+
+body.barcode-scanner-active ion-list {
+  background: transparent !important;
+  --background: transparent !important;
+}
+
+/* Ensure text remains visible in non-scanning cards */
+body.barcode-scanner-active .stat-number,
+body.barcode-scanner-active .stat-label,
+body.barcode-scanner-active h2,
+body.barcode-scanner-active p {
+  color: #000 !important;
+}
+
+/* Special handling for scanning mode items card to maintain black background */
+body.barcode-scanner-active .items-card.scanning-mode {
+  background: rgba(0, 0, 0, 0.9) !important;
+  --background: rgba(0, 0, 0, 0.9) !important;
+}
+
+
+/* Main Modal Container */
+.main-quantity-modal-container {
+  --backdrop-opacity: 0.3;
+  z-index: 99999 !important;
+}
+
+.main-quantity-modal-container::part(backdrop) {
+  background: rgba(0, 0, 0, 0.3) !important;
+}
+
+.main-quantity-modal-container::part(content) {
+  --background: transparent !important;
+  background: transparent !important;
+}
+
+.main-quantity-modal-container .modal-wrapper {
+  position: absolute !important;
+  top: 10% !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  width: 90% !important;
+  max-width: 350px !important;
+  height: auto !important;
+  border-radius: 12px !important;
+  overflow: hidden !important;
+}
+
+/* Main Modal Content */
+.main-quantity-modal-content {
+  --background: transparent !important;
+  position: relative !important;
+  z-index: 100000 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  height: auto !important;
+}
+
+/* Main Modal Wrapper */
+.main-quantity-modal-wrapper {
+  position: fixed !important;
+  top: 10% !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  width: 90% !important;
+  max-width: 350px !important;
+  z-index: 100001 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Single Theme - Clean White Design */
+.main-quantity-modal-card {
+  background: #ffffff !important;
+  color: #000000 !important;
+  border: 1px solid #e0e0e0 !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15) !important;
+  margin: 0 !important;
+  border-radius: 12px !important;
+}
+
+.main-quantity-modal-header {
+  padding: 20px 20px 10px 20px !important;
+  background: transparent !important;
+}
+
+.main-quantity-modal-title {
+  color: #000000 !important;
+  font-size: 18px !important;
+  font-weight: 600 !important;
+  text-align: center !important;
+  margin: 0 !important;
+}
+
+.main-quantity-modal-body {
+  padding: 10px 20px 20px 20px !important;
+  background: transparent !important;
+}
+
+.main-quantity-modal-input {
+  --background: #ffffff !important;
+  --color: #000000 !important;
+  --placeholder-color: #666666 !important;
+  --border-color: #cccccc !important;
+  --border-style: solid !important;
+  --border-width: 1px !important;
+  margin-bottom: 16px !important;
+  border-radius: 8px !important;
+  font-size: 16px !important;
+}
+
+.main-quantity-modal-input input {
+  color: #000000 !important;
+  background: #ffffff !important;
+}
+
+.main-quantity-modal-cancel-btn {
+  --background: transparent !important;
+  --color: #333333 !important;
+  --border-color: #333333 !important;
+  --border-style: solid !important;
+  --border-width: 1px !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  border-radius: 8px !important;
+  height: 44px !important;
+}
+
+.main-quantity-modal-save-btn {
+  --background: #3880ff !important;
+  --color: #ffffff !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  border-radius: 8px !important;
+  height: 44px !important;
+}
+
+/* Grid and Layout */
+.main-quantity-modal-grid {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.main-quantity-modal-row {
+  margin: 0 !important;
+  gap: 12px !important;
+}
+
+.main-quantity-modal-col {
+  padding: 0 6px !important;
+}
+
+/* Android specific optimizations */
+@media (max-width: 768px) {
+  .main-quantity-modal-wrapper {
+    width: 95% !important;
+    max-width: 320px !important;
+    top: 8% !important;
+  }
+  
+  .main-quantity-modal-input {
+    font-size: 16px !important; /* Prevents zoom on iOS/Android */
+    min-height: 44px !important;
+  }
+  
+  .main-quantity-modal-cancel-btn,
+  .main-quantity-modal-save-btn {
+    min-height: 48px !important;
+    font-size: 16px !important;
+  }
+}
+
+/* High DPI Android screens */
+@media (-webkit-min-device-pixel-ratio: 2) and (max-width: 768px) {
+  .main-quantity-modal-title {
+    font-size: 20px !important;
+  }
+}
+
+/* Force positioning for modal backdrop */
+.main-quantity-modal-container ion-backdrop {
+  z-index: 99998 !important;
+}
+
+/* Ensure modal content is above backdrop */
+.main-quantity-modal-container .modal-wrapper,
+.main-quantity-modal-wrapper {
+  z-index: 100002 !important;
+  position: fixed !important;
+}
+
+/* Modal Container */
+.quantity-modal-container {
+  --backdrop-opacity: 0.3;
+  z-index: 99999 !important;
+}
+
+.quantity-modal-container::part(backdrop) {
+  background: rgba(0, 0, 0, 0.3) !important;
+}
+
+.quantity-modal-container::part(content) {
+  --background: transparent !important;
+  background: transparent !important;
+}
+
+.quantity-modal-container .modal-wrapper {
+  position: absolute !important;
+  top: 10% !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  width: 90% !important;
+  max-width: 350px !important;
+  height: auto !important;
+  border-radius: 12px !important;
+  overflow: hidden !important;
+}
+
+/* Modal Content */
+.quantity-modal-content {
+  --background: transparent !important;
+  position: relative !important;
+  z-index: 100000 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  height: auto !important;
+}
+
+/* Modal Wrapper */
+.quantity-modal-wrapper {
+  position: fixed !important;
+  top: 10% !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  width: 90% !important;
+  max-width: 350px !important;
+  z-index: 100001 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Single Theme - Clean White Design */
+.quantity-modal-card {
+  background: #ffffff !important;
+  color: #000000 !important;
+  border: 1px solid #e0e0e0 !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15) !important;
+  margin: 0 !important;
+  border-radius: 12px !important;
+}
+
+.quantity-modal-header {
+  padding: 20px 20px 10px 20px !important;
+  background: transparent !important;
+}
+
+.quantity-modal-title {
+  color: #000000 !important;
+  font-size: 18px !important;
+  font-weight: 600 !important;
+  text-align: center !important;
+  margin: 0 !important;
+}
+
+.quantity-modal-body {
+  padding: 10px 20px 20px 20px !important;
+  background: transparent !important;
+}
+
+.quantity-modal-input {
+  --background: #ffffff !important;
+  --color: #000000 !important;
+  --placeholder-color: #666666 !important;
+  --border-color: #cccccc !important;
+  --border-style: solid !important;
+  --border-width: 1px !important;
+  margin-bottom: 16px !important;
+  border-radius: 8px !important;
+  font-size: 16px !important;
+}
+
+.quantity-modal-input input {
+  color: #000000 !important;
+  background: #ffffff !important;
+}
+
+.quantity-modal-cancel-btn {
+  --background: transparent !important;
+  --color: #333333 !important;
+  --border-color: #333333 !important;
+  --border-style: solid !important;
+  --border-width: 1px !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  border-radius: 8px !important;
+  height: 44px !important;
+}
+
+.quantity-modal-save-btn {
+  --background: #3880ff !important;
+  --color: #ffffff !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  border-radius: 8px !important;
+  height: 44px !important;
+}
+
+/* Grid and Layout */
+.quantity-modal-grid {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.quantity-modal-row {
+  margin: 0 !important;
+  gap: 12px !important;
+}
+
+.quantity-modal-col {
+  padding: 0 6px !important;
+}
+
+/* Android specific optimizations */
+@media (max-width: 768px) {
+  .quantity-modal-wrapper {
+    width: 95% !important;
+    max-width: 320px !important;
+    top: 8% !important;
+  }
+  
+  .quantity-modal-input {
+    font-size: 16px !important; /* Prevents zoom on iOS/Android */
+    min-height: 44px !important;
+  }
+  
+  .quantity-modal-cancel-btn,
+  .quantity-modal-save-btn {
+    min-height: 48px !important;
+    font-size: 16px !important;
+  }
+}
+
+/* High DPI Android screens */
+@media (-webkit-min-device-pixel-ratio: 2) and (max-width: 768px) {
+  .quantity-modal-title {
+    font-size: 20px !important;
+  }
+}
+
+/* Force positioning for modal backdrop */
+.quantity-modal-container ion-backdrop {
+  z-index: 99998 !important;
+}
+
+/* Ensure modal content is above backdrop */
+.quantity-modal-container .modal-wrapper,
+.quantity-modal-wrapper {
+  z-index: 100002 !important;
+  position: fixed !important;
+}

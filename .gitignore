@@ -8,7 +8,7 @@ build/
 # scanner/
 Goddown/
 stockLens/
-myApp/
+# myApp/
 
 
 stocklens_prisma.sqlite/
