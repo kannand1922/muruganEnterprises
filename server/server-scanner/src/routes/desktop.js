@@ -428,6 +428,9 @@ router.get("/api/low-stock/list", async (req, res) => {
         shopLocationId: location.shopLocationId,
         locationCode: location.locationCode,
         locationName: location.locationName,
+        sourceLocationId: location.sourceLocationId,
+        sourceLocationCode: location.sourceLocationCode,
+        sourceLocationName: location.sourceLocationName,
         itemCode: row.itemCode,
         itemName: row.itemName,
         brandName: row.brandName,
@@ -435,6 +438,7 @@ router.get("/api/low-stock/list", async (req, res) => {
         displayName: row.displayName,
         thresholdBottles: row.thresholdBottles,
         currentBottles: row.currentBottles,
+        sourceCurrentBottles: row.sourceCurrentBottles,
         ruleType: row.ruleType,
       });
     }

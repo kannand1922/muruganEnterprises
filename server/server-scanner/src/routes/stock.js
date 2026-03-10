@@ -1973,10 +1973,19 @@ router.get("/verify/unchecked-finished", async (req, res) => {
     return res.status(404).json({ success: false, message: "No active/current cycle found" });
   }
 
-  const [location, masterRows, finishedRows] = await Promise.all([
+  const [location, masterRows, finishedRows, unfinishedRows] = await Promise.all([
     prisma.shopLocation.findUnique({ where: { id: shopLocationId } }),
     loadMasterProducts(),
     prisma.cycleFinishedStock.findMany({
+      where: {
+        cycleId: cycle.id,
+        shopLocationId,
+      },
+      select: {
+        itemCode: true,
+      },
+    }),
+    prisma.cycleUnfinishedStock.findMany({
       where: {
         cycleId: cycle.id,
         shopLocationId,
@@ -1996,12 +2005,24 @@ router.get("/verify/unchecked-finished", async (req, res) => {
       .map((row) => normalizeItemCode(row.itemCode))
       .filter(Boolean)
   );
+  const unfinishedCodeSet = new Set(
+    unfinishedRows
+      .map((row) => normalizeItemCode(row.itemCode))
+      .filter(Boolean)
+  );
 
   const rows = [];
   const addedCodeSet = new Set();
   for (const master of masterRows) {
     const codeKey = normalizeItemCode(master.itemCode);
-    if (!codeKey || addedCodeSet.has(codeKey) || scannedCodeSet.has(codeKey)) continue;
+    if (
+      !codeKey ||
+      addedCodeSet.has(codeKey) ||
+      scannedCodeSet.has(codeKey) ||
+      unfinishedCodeSet.has(codeKey)
+    ) {
+      continue;
+    }
     addedCodeSet.add(codeKey);
     rows.push({
       itemCode: master.itemCode || "",

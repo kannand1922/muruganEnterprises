@@ -19,6 +19,12 @@ const {
   saveLocationLowStockSettings,
   runLowStockCheckAndNotify,
 } = require("../services/lowStockAlerts");
+const {
+  evaluateNilStock,
+  getLocationNilStockSettings,
+  saveLocationNilStockSettings,
+  runNilStockCheckAndNotify,
+} = require("../services/nilStockAlerts");
 
 const router = express.Router();
 
@@ -333,10 +339,78 @@ router.get("/low-stock/products", async (req, res) => {
       shopLocationId: location.shopLocationId,
       locationName: location.locationName,
       locationCode: location.locationCode,
+      sourceLocationId: location.sourceLocationId,
+      sourceLocationCode: location.sourceLocationCode,
+      sourceLocationName: location.sourceLocationName,
       notificationsEnabled: location.notificationsEnabled,
       generalThresholdBottles: location.generalThresholdBottles,
       lowCount: location.lowCount,
       rows: location.lowRows,
+    },
+  });
+});
+
+router.get("/nil-stock/settings/:shopLocationId", async (req, res) => {
+  const shopLocationId = parseId(req.params.shopLocationId);
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "Invalid shop location id" });
+  }
+
+  try {
+    const data = await getLocationNilStockSettings(shopLocationId);
+    return res.json({ success: true, data });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to load nil stock settings";
+    const statusCode = message.toLowerCase().includes("not found") ? 404 : 500;
+    return res.status(statusCode).json({ success: false, message });
+  }
+});
+
+router.put("/nil-stock/settings/:shopLocationId", async (req, res) => {
+  const shopLocationId = parseId(req.params.shopLocationId);
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "Invalid shop location id" });
+  }
+
+  try {
+    const data = await saveLocationNilStockSettings(shopLocationId, req.body || {});
+    return res.json({ success: true, data });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to save nil stock settings";
+    return res.status(400).json({ success: false, message });
+  }
+});
+
+router.get("/nil-stock/products", async (req, res) => {
+  const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "shopLocationId is required" });
+  }
+
+  const snapshot = await evaluateNilStock({
+    shopLocationIds: [shopLocationId],
+    onlyEnabledLocations: false,
+    includeTokens: false,
+  });
+  const location = snapshot.locations[0];
+
+  if (!location) {
+    return res.status(404).json({ success: false, message: "Shop location not found" });
+  }
+
+  return res.json({
+    success: true,
+    generatedAt: snapshot.generatedAt,
+    data: {
+      shopLocationId: location.shopLocationId,
+      locationName: location.locationName,
+      locationCode: location.locationCode,
+      sourceLocationId: location.sourceLocationId,
+      sourceLocationCode: location.sourceLocationCode,
+      sourceLocationName: location.sourceLocationName,
+      notificationsEnabled: location.notificationsEnabled,
+      nilCount: location.nilCount,
+      rows: location.nilRows,
     },
   });
 });
@@ -373,6 +447,21 @@ router.post("/low-stock/check-now", async (req, res) => {
     dryRun,
     trigger: "manual_api",
     enforceCsvVersionOnce: !forceResend,
+  });
+
+  return res.json(result);
+});
+
+router.post("/nil-stock/check-now", async (req, res) => {
+  const shopLocationId = parseOptionalPositiveInt(req.body?.shopLocationId);
+  const dryRun = parseOptionalBoolean(req.body?.dryRun, false);
+  const enforceState = parseOptionalBoolean(req.body?.enforceState, true);
+
+  const result = await runNilStockCheckAndNotify({
+    shopLocationIds: shopLocationId ? [shopLocationId] : null,
+    trigger: dryRun ? "manual_dry_run" : "manual",
+    dryRun,
+    enforceState,
   });
 
   return res.json(result);
@@ -485,6 +574,97 @@ router.get("/low-stock/notifications", async (req, res) => {
       status: statusFilter || "all",
       dateFrom: dateFromRaw || "",
       dateTo: dateToRaw || "",
+    },
+    summary,
+    count: rows.length,
+    rows,
+  });
+});
+
+router.get("/nil-stock/notifications", async (req, res) => {
+  const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
+  const status = String(req.query.status || "").trim().toLowerCase();
+  const dateFrom = parseDateBoundary(req.query.dateFrom);
+  const dateTo = parseDateBoundary(req.query.dateTo, true);
+
+  const where = {
+    ...(shopLocationId ? { shopLocationId } : {}),
+    ...(status ? { status } : {}),
+    ...(dateFrom || dateTo
+      ? {
+          createdAt: {
+            ...(dateFrom ? { gte: dateFrom } : {}),
+            ...(dateTo ? { lte: dateTo } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const rowsFromDb = await prisma.nilStockNotificationRun.findMany({
+    where,
+    include: {
+      shopLocation: {
+        select: {
+          locationCode: true,
+          locationName: true,
+        },
+      },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: 500,
+  });
+
+  const summary = rowsFromDb.reduce(
+    (acc, row) => {
+      acc.total += 1;
+      acc.totalNilCount += Number(row.nilCount || 0);
+      acc.totalSuccessCount += Number(row.successCount || 0);
+      acc.totalFailureCount += Number(row.failureCount || 0);
+      if (row.status === "sent") acc.sent += 1;
+      else if (row.status === "failed") acc.failed += 1;
+      else if (row.status === "skipped") acc.skipped += 1;
+      else acc.pending += 1;
+      return acc;
+    },
+    {
+      total: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      pending: 0,
+      totalNilCount: 0,
+      totalSuccessCount: 0,
+      totalFailureCount: 0,
+    }
+  );
+
+  const rows = rowsFromDb.map((row) => ({
+    id: row.id,
+    shopLocationId: row.shopLocationId,
+    locationCode: row.shopLocation?.locationCode || "",
+    locationName: row.shopLocation?.locationName || "",
+    csvVersion: row.csvVersion,
+    trigger: row.trigger || "",
+    status: row.status,
+    nilCount: row.nilCount,
+    tokenCount: row.tokenCount,
+    successCount: row.successCount,
+    failureCount: row.failureCount,
+    reason: row.reason || "",
+    createdAt: row.createdAt ? row.createdAt.toISOString() : null,
+    sentAt: row.sentAt ? row.sentAt.toISOString() : null,
+    notificationTime: (row.sentAt || row.createdAt || null)
+      ? (row.sentAt || row.createdAt).toISOString()
+      : null,
+  }));
+
+  return res.json({
+    success: true,
+    filters: {
+      shopLocationId: shopLocationId || null,
+      status,
+      dateFrom: dateFrom ? dateFrom.toISOString() : "",
+      dateTo: dateTo ? dateTo.toISOString() : "",
     },
     summary,
     count: rows.length,

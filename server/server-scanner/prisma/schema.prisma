@@ -47,6 +47,10 @@ model ShopLocation {
   lowStockBrandRules   LowStockBrandRule[]
   lowStockProductRules LowStockProductRule[]
   lowStockNotificationRuns LowStockNotificationRun[]
+  lowStockProductNotificationStates LowStockProductNotificationState[]
+  nilStockConfig   NilStockLocationConfig?
+  nilStockNotificationRuns NilStockNotificationRun[]
+  nilStockProductNotificationStates NilStockProductNotificationState[]
   fcmDeviceTokens      FcmDeviceToken[]
 
   @@map("shop_locations")
@@ -232,11 +236,13 @@ model LowStockLocationConfig {
   id                      Int      @id @default(autoincrement())
   shopLocationId          Int      @unique @map("shop_location_id")
   generalThresholdBottles Int      @default(6) @map("general_threshold_bottles")
+  sourceLocationId        Int?     @map("source_location_id")
   createdAt               DateTime @default(now()) @map("created_at")
   updatedAt               DateTime @updatedAt @map("updated_at")
 
   shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
 
+  @@index([sourceLocationId], map: "idx_low_stock_location_config_source_location")
   @@map("low_stock_location_config")
 }
 
@@ -327,6 +333,92 @@ model LowStockNotificationRun {
   @@index([csvVersion], map: "idx_low_stock_notification_run_version")
   @@index([shopLocationId, status], map: "idx_low_stock_notification_run_status")
   @@map("low_stock_notification_runs")
+}
+
+model LowStockProductNotificationState {
+  id               Int      @id @default(autoincrement())
+  shopLocationId   Int      @map("shop_location_id")
+  itemCode         String   @map("item_code")
+  itemName         String   @default("") @map("item_name")
+  brandName        String   @default("") @map("brand_name")
+  packValue        String   @default("") @map("pack_value")
+  displayName      String   @default("") @map("display_name")
+  thresholdBottles Int      @default(0) @map("threshold_bottles")
+  currentBottles   Int      @default(0) @map("current_bottles")
+  isNotified       Boolean  @default(false) @map("is_notified")
+  lastNotifiedAt   DateTime? @map("last_notified_at")
+  lastRecoveredAt  DateTime? @map("last_recovered_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@unique([shopLocationId, itemCode], map: "uniq_low_stock_product_notification_state")
+  @@index([shopLocationId, isNotified], map: "idx_low_stock_product_notification_state_lookup")
+  @@map("low_stock_product_notification_states")
+}
+
+model NilStockLocationConfig {
+  id                   Int      @id @default(autoincrement())
+  shopLocationId       Int      @unique @map("shop_location_id")
+  sourceLocationId     Int?     @map("source_location_id")
+  notificationsEnabled Boolean  @default(true) @map("notifications_enabled")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@index([sourceLocationId], map: "idx_nil_stock_location_config_source_location")
+  @@index([notificationsEnabled], map: "idx_nil_stock_location_config_notifications_enabled")
+  @@map("nil_stock_location_config")
+}
+
+model NilStockNotificationRun {
+  id             Int      @id @default(autoincrement())
+  shopLocationId Int      @map("shop_location_id")
+  csvVersion     String   @map("csv_version")
+  trigger        String?
+  status         String   @default("pending")
+  nilCount       Int      @default(0) @map("nil_count")
+  tokenCount     Int      @default(0) @map("token_count")
+  successCount   Int      @default(0) @map("success_count")
+  failureCount   Int      @default(0) @map("failure_count")
+  reason         String?
+  sentAt         DateTime? @map("sent_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@unique([shopLocationId, csvVersion], map: "uniq_nil_stock_notification_run")
+  @@index([csvVersion], map: "idx_nil_stock_notification_run_version")
+  @@index([shopLocationId, status], map: "idx_nil_stock_notification_run_status")
+  @@map("nil_stock_notification_runs")
+}
+
+model NilStockProductNotificationState {
+  id                   Int      @id @default(autoincrement())
+  shopLocationId       Int      @map("shop_location_id")
+  sourceLocationId     Int?     @map("source_location_id")
+  itemCode             String   @map("item_code")
+  itemName             String   @default("") @map("item_name")
+  brandName            String   @default("") @map("brand_name")
+  packValue            String   @default("") @map("pack_value")
+  displayName          String   @default("") @map("display_name")
+  sourceCurrentBottles Int      @default(0) @map("source_current_bottles")
+  targetCurrentBottles Int      @default(0) @map("target_current_bottles")
+  isNotified           Boolean  @default(false) @map("is_notified")
+  lastNotifiedAt       DateTime? @map("last_notified_at")
+  lastRecoveredAt      DateTime? @map("last_recovered_at")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@unique([shopLocationId, itemCode], map: "uniq_nil_stock_product_notification_state")
+  @@index([shopLocationId, isNotified], map: "idx_nil_stock_product_notification_state_lookup")
+  @@index([sourceLocationId], map: "idx_nil_stock_product_notification_state_source_location")
+  @@map("nil_stock_product_notification_states")
 }
 
 model OperatorDailyMismatchSummary {

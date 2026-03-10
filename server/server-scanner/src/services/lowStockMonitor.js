@@ -1,6 +1,7 @@
 const fs = require("fs");
 const { masterFilePath } = require("./masterProducts");
 const { runLowStockCheckAndNotify } = require("./lowStockAlerts");
+const { runNilStockCheckAndNotify } = require("./nilStockAlerts");
 
 const DEFAULT_POLL_INTERVAL_MS = 15000;
 
@@ -8,6 +9,7 @@ let intervalHandle = null;
 let lastMtimeMs = null;
 let scanInFlight = false;
 let warnedMissingFile = false;
+let dailyResetTimeoutHandle = null;
 
 function formatTimestamp(value) {
   const date = new Date(value || 0);
@@ -19,6 +21,32 @@ function getPollIntervalMs() {
   const raw = Number(process.env.LOW_STOCK_WATCH_INTERVAL_MS || DEFAULT_POLL_INTERVAL_MS);
   if (!Number.isFinite(raw) || raw < 5000) return DEFAULT_POLL_INTERVAL_MS;
   return Math.trunc(raw);
+}
+
+function getMsUntilNextLocalMidnight() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(24, 0, 0, 0);
+  return Math.max(1000, next.getTime() - now.getTime());
+}
+
+function scheduleDailyResetTrigger() {
+  if (dailyResetTimeoutHandle) {
+    clearTimeout(dailyResetTimeoutHandle);
+    dailyResetTimeoutHandle = null;
+  }
+
+  dailyResetTimeoutHandle = setTimeout(() => {
+    dailyResetTimeoutHandle = null;
+    void (async () => {
+      await triggerLowStockScan("daily_reset");
+      scheduleDailyResetTrigger();
+    })();
+  }, getMsUntilNextLocalMidnight());
+
+  if (typeof dailyResetTimeoutHandle.unref === "function") {
+    dailyResetTimeoutHandle.unref();
+  }
 }
 
 async function readCsvMtimeMs() {
@@ -42,9 +70,12 @@ async function triggerLowStockScan(trigger) {
   }
   scanInFlight = true;
   try {
-    const result = await runLowStockCheckAndNotify({ trigger });
-    const notifySummary = Array.isArray(result.notifyResults)
-      ? result.notifyResults
+    const [lowResult, nilResult] = await Promise.all([
+      runLowStockCheckAndNotify({ trigger }),
+      runNilStockCheckAndNotify({ trigger }),
+    ]);
+    const lowNotifySummary = Array.isArray(lowResult.notifyResults)
+      ? lowResult.notifyResults
           .map((row) => {
             const locationName = String(row.locationName || row.shopLocationId || "location");
             const status = row.sent ? "sent" : row.reason || "skipped";
@@ -52,8 +83,17 @@ async function triggerLowStockScan(trigger) {
           })
           .join(" | ")
       : "no-results";
+    const nilNotifySummary = Array.isArray(nilResult.notifyResults)
+      ? nilResult.notifyResults
+          .map((row) => {
+            const locationName = String(row.locationName || row.shopLocationId || "location");
+            const status = row.sent ? "sent" : row.reason || "skipped";
+            return `${locationName}:${status}:${Number(row.nilCount || 0)}`;
+          })
+          .join(" | ")
+      : "no-results";
     console.log(
-      `Low stock monitor: trigger=${trigger}, lowLocations=${result.locationsWithLowStock}, totalLowProducts=${result.totalLowProducts}, csvVersion=${result.csvVersion}, notify=${notifySummary}`
+      `Low stock monitor: trigger=${trigger}, lowLocations=${lowResult.locationsWithLowStock}, totalLowProducts=${lowResult.totalLowProducts}, nilLocations=${nilResult.locationsWithNilStock}, totalNilProducts=${nilResult.totalNilProducts}, csvVersion=${lowResult.csvVersion}, lowNotify=${lowNotifySummary}, nilNotify=${nilNotifySummary}`
     );
   } catch (error) {
     console.error(`Low stock monitor failed (${trigger}):`, error);
@@ -94,6 +134,7 @@ async function startLowStockMonitor() {
     await triggerLowStockScan("server_startup");
   }
 
+  scheduleDailyResetTrigger();
   const pollIntervalMs = getPollIntervalMs();
   intervalHandle = setInterval(() => {
     void pollOnce();
@@ -105,9 +146,14 @@ async function startLowStockMonitor() {
 }
 
 function stopLowStockMonitor() {
-  if (!intervalHandle) return;
-  clearInterval(intervalHandle);
-  intervalHandle = null;
+  if (intervalHandle) {
+    clearInterval(intervalHandle);
+    intervalHandle = null;
+  }
+  if (dailyResetTimeoutHandle) {
+    clearTimeout(dailyResetTimeoutHandle);
+    dailyResetTimeoutHandle = null;
+  }
   console.log("Low stock monitor stopped.");
 }
 
