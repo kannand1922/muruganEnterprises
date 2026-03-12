@@ -209,6 +209,12 @@ export async function printVerificationList(payload: {
   cycleId?: number;
   activityDate?: string;
   preview?: boolean;
+  filterLabel?: string;
+  filteredItems?: Array<{
+    shopLocationId: number;
+    itemCode: string;
+    displayName: string;
+  }>;
 }) {
   return apiPost<{
     success: boolean;

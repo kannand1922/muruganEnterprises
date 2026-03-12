@@ -8,6 +8,7 @@
     "printer"
   ],
   "scripts": {
+    "dev2": "node scripts/dev2.js",
     "dev:cycle": "npm --prefix Cycle run dev",
     "dev:stockLens": "npm --prefix stockLens run dev",
     "dev:printer": "npm --prefix printer run dev",

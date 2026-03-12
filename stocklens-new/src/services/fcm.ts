@@ -1,4 +1,5 @@
-import { Capacitor } from "@capacitor/core";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
 import { LocalNotifications } from "@capacitor/local-notifications";
 import {
   PushNotifications,
@@ -6,12 +7,17 @@ import {
   type PushNotificationSchema,
   type Token,
 } from "@capacitor/push-notifications";
+import { registerFcmToken, sendFcmHeartbeat } from "../api/metaApi";
+import { getFcmAlertLocationIdFromStorage } from "../config/fcm";
+import { getCurrentLocationIdFromStorage } from "../config/location";
+import { getCurrentPhoneIdFromStorage } from "../config/phone";
 
 export const FCM_TOKEN_STORAGE_KEY = "stocklens_fcm_token";
 
 const FCM_REGISTRATION_TIMEOUT_MS = 15000;
 const FOREGROUND_NOTIFICATION_CHANNEL_ID = "stocklens-foreground";
 const FOREGROUND_NOTIFICATION_CHANNEL_NAME = "StockLens Alerts";
+const FCM_HEARTBEAT_INTERVAL_MS = 60_000;
 
 type InitFcmOptions = {
   force?: boolean;
@@ -21,6 +27,9 @@ type InitFcmOptions = {
 let listenersAttached = false;
 let inFlightRegistration: Promise<string | null> | null = null;
 let localNotificationChannelReady = false;
+let heartbeatIntervalId: number | null = null;
+let appStateListenerHandle: PluginListenerHandle | null = null;
+let browserVisibilityListenerAttached = false;
 
 function isAndroidNative() {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
@@ -134,6 +143,95 @@ export function getStoredFcmToken() {
 
 export function clearStoredFcmToken() {
   localStorage.removeItem(FCM_TOKEN_STORAGE_KEY);
+}
+
+function getHeartbeatPayload(active = true) {
+  const token = getStoredFcmToken();
+  const phoneId = getCurrentPhoneIdFromStorage();
+  const shopLocationId = getFcmAlertLocationIdFromStorage() || getCurrentLocationIdFromStorage();
+
+  if (!token || !phoneId || !shopLocationId) {
+    return null;
+  }
+
+  return {
+    token,
+    phoneId,
+    shopLocationId,
+    active,
+  };
+}
+
+export async function syncFcmConnectionState(active = true, options: { allowRegisterFallback?: boolean } = {}) {
+  const payload = getHeartbeatPayload(active);
+  if (!payload) return null;
+
+  try {
+    return await sendFcmHeartbeat(payload);
+  } catch (error) {
+    if (!options.allowRegisterFallback) throw error;
+    return registerFcmToken(payload);
+  }
+}
+
+function stopFcmHeartbeatLoop() {
+  if (heartbeatIntervalId !== null) {
+    window.clearInterval(heartbeatIntervalId);
+    heartbeatIntervalId = null;
+  }
+}
+
+function startFcmHeartbeatLoop() {
+  stopFcmHeartbeatLoop();
+  heartbeatIntervalId = window.setInterval(() => {
+    void syncFcmConnectionState(true).catch((error) => {
+      console.warn("FCM heartbeat failed:", error);
+    });
+  }, FCM_HEARTBEAT_INTERVAL_MS);
+}
+
+export async function startFcmConnectionHeartbeat() {
+  if (!isAndroidNative()) return;
+
+  await syncFcmConnectionState(true, { allowRegisterFallback: true }).catch((error) => {
+    console.warn("Initial FCM heartbeat failed:", error);
+  });
+  startFcmHeartbeatLoop();
+
+  if (!appStateListenerHandle) {
+    appStateListenerHandle = await CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+      if (isActive) {
+        void syncFcmConnectionState(true, { allowRegisterFallback: true }).catch((error) => {
+          console.warn("FCM active heartbeat failed:", error);
+        });
+        startFcmHeartbeatLoop();
+        return;
+      }
+
+      stopFcmHeartbeatLoop();
+      void syncFcmConnectionState(false).catch((error) => {
+        console.warn("FCM inactive heartbeat failed:", error);
+      });
+    });
+  }
+
+  if (!browserVisibilityListenerAttached) {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        void syncFcmConnectionState(true, { allowRegisterFallback: true }).catch((error) => {
+          console.warn("FCM visible heartbeat failed:", error);
+        });
+        startFcmHeartbeatLoop();
+        return;
+      }
+
+      stopFcmHeartbeatLoop();
+      void syncFcmConnectionState(false).catch((error) => {
+        console.warn("FCM hidden heartbeat failed:", error);
+      });
+    });
+    browserVisibilityListenerAttached = true;
+  }
 }
 
 async function attachNotificationListeners() {
@@ -254,7 +352,13 @@ export async function initializeFcmToken(options: InitFcmOptions = {}) {
   })();
 
   try {
-    return await inFlightRegistration;
+    const token = await inFlightRegistration;
+    if (token) {
+      await syncFcmConnectionState(true, { allowRegisterFallback: true }).catch((error) => {
+        console.warn("FCM registration sync failed:", error);
+      });
+    }
+    return token;
   } finally {
     inFlightRegistration = null;
   }

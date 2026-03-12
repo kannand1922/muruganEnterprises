@@ -12,11 +12,10 @@ import {
   IonLabel,
   IonModal,
   IonPage,
+  IonPopover,
   IonRefresher,
   IonRefresherContent,
   IonSearchbar,
-  IonSelect,
-  IonSelectOption,
   IonSegment,
   IonSegmentButton,
   IonSpinner,
@@ -42,7 +41,11 @@ import {
   textOutline,
   wineOutline,
 } from "ionicons/icons";
-import { BarcodeScanner, type BarcodesScannedEvent } from "@capacitor-mlkit/barcode-scanning";
+import {
+  BarcodeFormat,
+  BarcodeScanner,
+  type BarcodesScannedEvent,
+} from "@capacitor-mlkit/barcode-scanning";
 import { Capacitor } from "@capacitor/core";
 import { useHistory } from "react-router-dom";
 import { AppTopBar } from "../components/common/AppTopBar";
@@ -76,6 +79,21 @@ const FAST_SELLING_FILTER = "fast_selling";
 const SEARCH_ITEM_FILTER_KEY = "stocklens_search_item_filter";
 const CURRENT_OPERATOR_ID_KEY = "stocklens_current_operator_id";
 const CURRENT_OPERATOR_NAME_KEY = "stocklens_current_operator_name";
+const ALL_ITEMS_FILTER_VALUE = "__all__";
+const SCAN_FORMATS = [
+  BarcodeFormat.Code128,
+  BarcodeFormat.Code39,
+  BarcodeFormat.Code93,
+  BarcodeFormat.Codabar,
+  BarcodeFormat.Ean13,
+  BarcodeFormat.Ean8,
+  BarcodeFormat.UpcA,
+  BarcodeFormat.UpcE,
+  BarcodeFormat.Itf,
+] as const;
+const SCAN_EVENT_DEBOUNCE_MS = 750;
+const SCAN_RETRY_COOLDOWN_SECONDS = 1;
+const DEFAULT_ANDROID_SCAN_ZOOM_RATIO = 1.5;
 
 type SearchResult = MasterProduct & {
   matchScore: number;
@@ -415,6 +433,39 @@ function groupSearchResults(results: SearchResult[]) {
   return Array.from(groupMap.values()).sort((a, b) => b.matchScore - a.matchScore);
 }
 
+function mergeGroupedResults(groups: GroupedSearchResult[]) {
+  const merged = new Map<string, GroupedSearchResult>();
+
+  groups.forEach((group) => {
+    const key = `${String(group.brandName || "").toLowerCase()}|${String(group.itemName || "").toLowerCase()}`;
+    if (!merged.has(key)) {
+      merged.set(key, {
+        ...group,
+        packSizes: [...group.packSizes],
+        itemCodes: [...group.itemCodes],
+      });
+      return;
+    }
+
+    const existing = merged.get(key)!;
+    group.packSizes.forEach((pack) => {
+      if (!existing.packSizes.some((row) => getFieldValue(row.itemCode) === getFieldValue(pack.itemCode))) {
+        existing.packSizes.push(pack);
+      }
+    });
+    group.itemCodes.forEach((itemCode) => {
+      if (!existing.itemCodes.includes(itemCode)) {
+        existing.itemCodes.push(itemCode);
+      }
+    });
+    if (group.matchScore > existing.matchScore) {
+      existing.matchScore = group.matchScore;
+    }
+  });
+
+  return Array.from(merged.values()).sort((a, b) => b.matchScore - a.matchScore);
+}
+
 export function StockEntryPage() {
   const [presentToast] = useIonToast();
   const [presentStockMismatchAlert] = useIonAlert();
@@ -437,11 +488,21 @@ export function StockEntryPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [groupedSearchResults, setGroupedSearchResults] = useState<GroupedSearchResult[]>([]);
   const [showSearchResults, setShowSearchResults] = useState(false);
-  const [searchItemFilter, setSearchItemFilter] = useState(() => {
-    const stored = String(localStorage.getItem(SEARCH_ITEM_FILTER_KEY) || "")
-      .trim()
-      .toLowerCase();
-    return stored || "all";
+  const [searchItemFilters, setSearchItemFilters] = useState<string[]>(() => {
+    const rawStored = String(localStorage.getItem(SEARCH_ITEM_FILTER_KEY) || "").trim();
+    if (!rawStored) return [];
+
+    try {
+      const parsed = JSON.parse(rawStored);
+      if (Array.isArray(parsed)) {
+        return parsed.map((value) => String(value || "").trim()).filter(Boolean);
+      }
+    } catch {
+      // Keep backward compatibility with the previous single-select string storage.
+    }
+
+    if (rawStored.toLowerCase() === "all") return [];
+    return [rawStored];
   });
   const [bestSellingRows, setBestSellingRows] = useState<BestSellingProduct[]>([]);
   const [isLoadingBestSelling, setIsLoadingBestSelling] = useState(false);
@@ -461,6 +522,9 @@ export function StockEntryPage() {
   const [packQty, setPackQty] = useState("");
   const [bottleQty, setBottleQty] = useState("");
   const [saving, setSaving] = useState(false);
+  const [itemFilterPopoverOpen, setItemFilterPopoverOpen] = useState(false);
+  const [itemFilterPopoverEvent, setItemFilterPopoverEvent] = useState<Event | undefined>(undefined);
+  const [draftSearchItemFilters, setDraftSearchItemFilters] = useState<string[]>([]);
 
   const cooldownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastScanTimeRef = useRef(0);
@@ -648,6 +712,16 @@ export function StockEntryPage() {
     return groupSearchResults(results);
   }, [bestSellingCodeSet, masterRows, matchedCodeSetForLocation]);
 
+  const unmatchedGroupedResults = useMemo(() => {
+    const filteredItems = masterRows.filter((row) => !isMatchedItemForLocation(row));
+    const results: SearchResult[] = filteredItems.map((row) => ({
+      ...row,
+      matchScore: 1,
+      matchType: "partial",
+    }));
+    return groupSearchResults(results);
+  }, [masterRows, matchedCodeSetForLocation]);
+
   const filteredFastSellingGroupedResults = useMemo(() => {
     const trimmed = searchQuery.trim().toLowerCase();
     const minLength = mode === "barcode" ? 1 : 2;
@@ -674,15 +748,71 @@ export function StockEntryPage() {
     });
   }, [fastSellingGroupedResults, mode, searchQuery]);
 
+  const normalizedSearchItemFilterSet = useMemo(() => {
+    return new Set(
+      searchItemFilters.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean)
+    );
+  }, [searchItemFilters]);
+
+  const normalizedDraftSearchItemFilterSet = useMemo(() => {
+    return new Set(
+      draftSearchItemFilters.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean)
+    );
+  }, [draftSearchItemFilters]);
+
+  const isFastSellingSelected = normalizedSearchItemFilterSet.has(FAST_SELLING_FILTER);
+  const hasNamedItemFilters = useMemo(() => {
+    for (const value of searchItemFilters) {
+      if (String(value || "").trim().toLowerCase() !== FAST_SELLING_FILTER) {
+        return true;
+      }
+    }
+    return false;
+  }, [searchItemFilters]);
+
   const filteredGroupedResults = useMemo(() => {
-    if (searchItemFilter === FAST_SELLING_FILTER) {
-      return filteredFastSellingGroupedResults;
+    const minLength = mode === "barcode" ? 1 : 2;
+    const shouldUseQuery = searchQuery.trim().length >= minLength;
+    const searchableRows = shouldUseQuery ? groupedSearchResults : unmatchedGroupedResults;
+    const namedRows = hasNamedItemFilters
+      ? searchableRows.filter((group) =>
+          normalizedSearchItemFilterSet.has((group.itemName || "").trim().toLowerCase())
+        )
+      : [];
+
+    if (isFastSellingSelected && hasNamedItemFilters) {
+      const fastRows = shouldUseQuery ? filteredFastSellingGroupedResults : fastSellingGroupedResults;
+      return mergeGroupedResults([...fastRows, ...namedRows]);
     }
-    if (searchItemFilter === "all") {
-      return groupedSearchResults;
+
+    if (isFastSellingSelected) {
+      return shouldUseQuery ? filteredFastSellingGroupedResults : fastSellingGroupedResults;
     }
-    return groupedSearchResults.filter((group) => (group.itemName || "").trim() === searchItemFilter);
-  }, [groupedSearchResults, filteredFastSellingGroupedResults, searchItemFilter]);
+
+    if (hasNamedItemFilters) {
+      return namedRows;
+    }
+
+    return searchableRows;
+  }, [
+    fastSellingGroupedResults,
+    groupedSearchResults,
+    filteredFastSellingGroupedResults,
+    hasNamedItemFilters,
+    isFastSellingSelected,
+    mode,
+    normalizedSearchItemFilterSet,
+    searchQuery,
+    unmatchedGroupedResults,
+  ]);
+
+  const selectedItemFilterText = useMemo(() => {
+    if (searchItemFilters.length === 0) return "All";
+    if (searchItemFilters.length === 1) {
+      return searchItemFilters[0] === FAST_SELLING_FILTER ? "Fast Selling" : searchItemFilters[0];
+    }
+    return `${searchItemFilters.length} selected`;
+  }, [searchItemFilters]);
 
   const selectedProductBpc = Number(selectedProduct?.bpc) || 12;
   const enteredCases = Number.parseInt(packQty || "0", 10) || 0;
@@ -859,7 +989,7 @@ export function StockEntryPage() {
         loadFinishedRows(cycleId, shopLocationId),
         loadFinishedProgress(cycleId, shopLocationId),
       ]);
-      if (searchItemFilter === FAST_SELLING_FILTER) {
+      if (isFastSellingSelected) {
         await loadBestSelling();
       }
       if (showToast) {
@@ -913,28 +1043,44 @@ export function StockEntryPage() {
   useEffect(() => {
     setSearchQuery("");
     setGroupedSearchResults([]);
-    setShowSearchResults(mode !== "scan" && searchItemFilter === FAST_SELLING_FILTER);
+    setShowSearchResults(false);
   }, [mode]);
 
   useEffect(() => {
-    localStorage.setItem(SEARCH_ITEM_FILTER_KEY, searchItemFilter);
-  }, [searchItemFilter]);
+    localStorage.setItem(SEARCH_ITEM_FILTER_KEY, JSON.stringify(searchItemFilters));
+  }, [searchItemFilters]);
 
   useEffect(() => {
-    if (
-      searchItemFilter !== "all" &&
-      searchItemFilter !== FAST_SELLING_FILTER &&
-      !itemFilterOptions.includes(searchItemFilter)
-    ) {
-      setSearchItemFilter("all");
-    }
-  }, [itemFilterOptions, searchItemFilter]);
+    const validItemMap = new Map(
+      itemFilterOptions.map((itemName) => [itemName.trim().toLowerCase(), itemName])
+    );
+    setSearchItemFilters((previous) => {
+      const nextValues: string[] = [];
+      previous.forEach((value) => {
+        const normalized = String(value || "").trim().toLowerCase();
+        if (!normalized) return;
+        if (normalized === FAST_SELLING_FILTER) {
+          nextValues.push(FAST_SELLING_FILTER);
+          return;
+        }
+        const matchedName = validItemMap.get(normalized);
+        if (matchedName) {
+          nextValues.push(matchedName);
+        }
+      });
+      const uniqueValues = Array.from(new Set(nextValues));
+      if (uniqueValues.length === previous.length && uniqueValues.every((value, index) => value === previous[index])) {
+        return previous;
+      }
+      return uniqueValues;
+    });
+  }, [itemFilterOptions]);
 
   useEffect(() => {
-    if (searchItemFilter === FAST_SELLING_FILTER) {
+    if (isFastSellingSelected) {
       void loadBestSelling();
     }
-  }, [searchItemFilter]);
+  }, [isFastSellingSelected]);
 
   useEffect(() => {
     function onLocationChanged(event: Event) {
@@ -994,7 +1140,7 @@ export function StockEntryPage() {
   }
 
   function startCooldownTimer() {
-    setCooldownTimeLeft(3);
+    setCooldownTimeLeft(SCAN_RETRY_COOLDOWN_SECONDS);
     setCanScan(false);
 
     if (cooldownIntervalRef.current) {
@@ -1023,7 +1169,7 @@ export function StockEntryPage() {
       }
 
       const currentTime = Date.now();
-      if (currentTime - lastScanTimeRef.current < 2000) {
+      if (currentTime - lastScanTimeRef.current < SCAN_EVENT_DEBOUNCE_MS) {
         return;
       }
       lastScanTimeRef.current = currentTime;
@@ -1033,19 +1179,7 @@ export function StockEntryPage() {
       }
 
       const barcode = event.barcodes[0];
-      const allowedFormats = [
-        "CODE_128",
-        "CODE_39",
-        "CODE_93",
-        "CODABAR",
-        "EAN_13",
-        "EAN_8",
-        "UPC_A",
-        "UPC_E",
-        "ITF",
-      ];
-
-      if (!allowedFormats.includes(barcode.format)) {
+      if (!SCAN_FORMATS.includes(barcode.format as (typeof SCAN_FORMATS)[number])) {
         return;
       }
 
@@ -1061,6 +1195,29 @@ export function StockEntryPage() {
 
   async function removeBarcodeListener() {
     await BarcodeScanner.removeAllListeners();
+  }
+
+  async function applyDefaultScannerZoom() {
+    if (Capacitor.getPlatform() !== "android") {
+      return;
+    }
+
+    try {
+      const [{ zoomRatio: minZoomRatio }, { zoomRatio: maxZoomRatio }] = await Promise.all([
+        BarcodeScanner.getMinZoomRatio(),
+        BarcodeScanner.getMaxZoomRatio(),
+      ]);
+      const targetZoomRatio = Math.min(
+        maxZoomRatio,
+        Math.max(minZoomRatio, DEFAULT_ANDROID_SCAN_ZOOM_RATIO)
+      );
+
+      if (Number.isFinite(targetZoomRatio) && targetZoomRatio > 0) {
+        await BarcodeScanner.setZoomRatio({ zoomRatio: targetZoomRatio });
+      }
+    } catch {
+      // Some devices do not expose zoom until the camera session is fully ready.
+    }
   }
 
   async function startScanning() {
@@ -1113,7 +1270,8 @@ export function StockEntryPage() {
       document.body.classList.add("barcode-scanner-active");
 
       await addBarcodeListener();
-      await BarcodeScanner.startScan({ formats: [] });
+      await BarcodeScanner.startScan({ formats: [...SCAN_FORMATS] });
+      await applyDefaultScannerZoom();
       setIsScanning(true);
     } catch (error) {
       await removeBarcodeListener();
@@ -1236,7 +1394,7 @@ export function StockEntryPage() {
     const minLength = resolvedMode === "barcode" ? 1 : 2;
     if (trimmed.length < minLength) {
       setGroupedSearchResults([]);
-      setShowSearchResults(searchItemFilter === FAST_SELLING_FILTER);
+      setShowSearchResults(false);
       return;
     }
 
@@ -1255,19 +1413,44 @@ export function StockEntryPage() {
     setShowSearchResults(grouped.length > 0);
   }
 
-  function handleItemFilterChange(value: string) {
-    const nextValue = value || "all";
-    setSearchItemFilter(nextValue);
+  function handleItemFilterChange(value: string | string[] | null | undefined) {
+    const nextValues = Array.isArray(value)
+      ? value.map((entry) => String(entry || "").trim()).filter(Boolean)
+      : [];
+    const resolvedValues =
+      nextValues.length === 0 || nextValues.includes(ALL_ITEMS_FILTER_VALUE)
+        ? []
+        : Array.from(new Set(nextValues));
 
-    if (nextValue === FAST_SELLING_FILTER) {
+    setSearchItemFilters(resolvedValues);
+
+    const minLength = mode === "barcode" ? 1 : 2;
+    if (searchQuery.trim().length >= minLength) {
       setShowSearchResults(true);
       return;
     }
+    setShowSearchResults(false);
+  }
 
-    const minLength = mode === "barcode" ? 1 : 2;
-    if (searchQuery.trim().length < minLength) {
-      setShowSearchResults(false);
+  function toggleDraftItemFilterValue(value: string) {
+    if (value === ALL_ITEMS_FILTER_VALUE) {
+      setDraftSearchItemFilters([]);
+      return;
     }
+
+    const normalizedValue = value.trim().toLowerCase();
+    setDraftSearchItemFilters((previous) => {
+      const exists = previous.some((entry) => entry.trim().toLowerCase() === normalizedValue);
+      if (exists) {
+        return previous.filter((entry) => entry.trim().toLowerCase() !== normalizedValue);
+      }
+      return [...previous, value];
+    });
+  }
+
+  function applyDraftItemFilters() {
+    handleItemFilterChange(draftSearchItemFilters);
+    setItemFilterPopoverOpen(false);
   }
 
   function handleOperatorChange(rawValue: string | number | null | undefined) {
@@ -1598,30 +1781,27 @@ export function StockEntryPage() {
                 <div className="dashboard-search-top-block dashboard-search-section">
                   {mode !== "scan" ? (
                     <div className="search-filter-row">
-                      <IonItem lines="none" className="search-filter-item">
+                      <IonItem
+                        lines="none"
+                        className="search-filter-item search-filter-item-button"
+                        button={true}
+                        detail={false}
+                        disabled={isMasterBlocked || !selectedOperatorId}
+                        onClick={(event) => {
+                          setItemFilterPopoverEvent(event.nativeEvent);
+                          setDraftSearchItemFilters(searchItemFilters);
+                          setItemFilterPopoverOpen(true);
+                        }}
+                      >
                         <IonLabel>Item</IonLabel>
-                        <IonSelect
-                          value={searchItemFilter}
-                          interface="popover"
-                          disabled={isMasterBlocked || !selectedOperatorId}
-                          onIonChange={(event) => handleItemFilterChange(event.detail.value || "all")}
-                        >
-                          <IonSelectOption value="all">All</IonSelectOption>
-                          <IonSelectOption value={FAST_SELLING_FILTER}>
-                            {isLoadingBestSelling ? "Fast Selling..." : "Fast Selling"}
-                          </IonSelectOption>
-                          {itemFilterOptions.map((itemName) => (
-                            <IonSelectOption key={itemName} value={itemName}>
-                              {itemName}
-                            </IonSelectOption>
-                          ))}
-                        </IonSelect>
+                        <span className="search-filter-item-value">{selectedItemFilterText}</span>
+                        <IonIcon icon={chevronForwardOutline} className="search-filter-item-chevron" />
                       </IonItem>
                       <IonButton
                         fill="solid"
                         className="search-filter-cancel-btn"
-                        disabled={isMasterBlocked || !selectedOperatorId || searchItemFilter === "all"}
-                        onClick={() => handleItemFilterChange("all")}
+                        disabled={isMasterBlocked || !selectedOperatorId || searchItemFilters.length === 0}
+                        onClick={() => handleItemFilterChange([ALL_ITEMS_FILTER_VALUE])}
                       >
                         Cancel
                       </IonButton>
@@ -1868,6 +2048,64 @@ export function StockEntryPage() {
           </>
         ) : null}
       </IonContent>
+
+      <IonPopover
+        isOpen={itemFilterPopoverOpen}
+        event={itemFilterPopoverEvent}
+        onDidDismiss={() => {
+          setItemFilterPopoverOpen(false);
+          setDraftSearchItemFilters(searchItemFilters);
+        }}
+        className="search-filter-popover"
+      >
+        <div className="search-filter-popover-content">
+          <div className="search-filter-popover-actions">
+            <IonButton
+              size="small"
+              fill="clear"
+              onClick={() => {
+                setDraftSearchItemFilters(searchItemFilters);
+                setItemFilterPopoverOpen(false);
+              }}
+            >
+              Close
+            </IonButton>
+            <IonButton size="small" onClick={applyDraftItemFilters}>
+              Apply
+            </IonButton>
+          </div>
+          <button
+            type="button"
+            className="search-filter-popover-row"
+            onClick={() => toggleDraftItemFilterValue(ALL_ITEMS_FILTER_VALUE)}
+          >
+            <input type="checkbox" readOnly checked={draftSearchItemFilters.length === 0} />
+            <span>All</span>
+          </button>
+          <button
+            type="button"
+            className="search-filter-popover-row"
+            onClick={() => toggleDraftItemFilterValue(FAST_SELLING_FILTER)}
+          >
+            <input type="checkbox" readOnly checked={normalizedDraftSearchItemFilterSet.has(FAST_SELLING_FILTER)} />
+            <span>{isLoadingBestSelling ? "Fast Selling..." : "Fast Selling"}</span>
+          </button>
+          {itemFilterOptions.map((itemName) => {
+            const checked = normalizedDraftSearchItemFilterSet.has(itemName.trim().toLowerCase());
+            return (
+              <button
+                type="button"
+                key={itemName}
+                className="search-filter-popover-row"
+                onClick={() => toggleDraftItemFilterValue(itemName)}
+              >
+                <input type="checkbox" readOnly checked={checked} />
+                <span>{itemName}</span>
+              </button>
+            );
+          })}
+        </div>
+      </IonPopover>
 
       <IonModal
         isOpen={showOperatorModal}

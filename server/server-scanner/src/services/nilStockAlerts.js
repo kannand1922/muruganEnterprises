@@ -2,6 +2,7 @@ const fs = require("fs");
 const { prisma } = require("../prisma");
 const { loadMasterProducts, masterFilePath } = require("./masterProducts");
 const { sendPushNotificationToMany } = require("./fcmPush");
+const { getActiveDeviceCutoff } = require("./pushTokenActivity");
 
 const NIL_STOCK_PRODUCT_STATE_RESET_DAY_KEY = "nil_stock_product_notification_state_reset_day";
 
@@ -271,6 +272,7 @@ async function evaluateNilStock(options = {}) {
   }
 
   const locationIds = locations.map((row) => row.id);
+  const activeDeviceCutoff = getActiveDeviceCutoff();
   const [configs, tokenRows, masterRows] = await Promise.all([
     prisma.nilStockLocationConfig.findMany({
       where: {
@@ -282,6 +284,9 @@ async function evaluateNilStock(options = {}) {
       ? prisma.fcmDeviceToken.findMany({
           where: {
             active: true,
+            lastSeenAt: {
+              gte: activeDeviceCutoff,
+            },
             shopLocationId: { in: locationIds },
             phone: {
               is: {

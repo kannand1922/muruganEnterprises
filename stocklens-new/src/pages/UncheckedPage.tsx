@@ -2,6 +2,7 @@ import {
   IonBadge,
   IonButton,
   IonContent,
+  IonIcon,
   IonItem,
   IonLabel,
   IonPage,
@@ -11,11 +12,14 @@ import {
   IonSpinner,
   useIonToast,
 } from "@ionic/react";
+import { printOutline } from "ionicons/icons";
 import { useEffect, useMemo, useState } from "react";
 import { getCurrentCycle } from "../api/cyclesApi";
+import { getPrinters } from "../api/metaApi";
 import {
   getVerifyUncheckedFinished,
   getVerifyMismatchedFinished,
+  printVerificationList,
   type VerifyMismatchedFinishedRow,
   type VerifyUncheckedFinishedRow,
 } from "../api/stockApi";
@@ -23,6 +27,7 @@ import { getCurrentLocationIdFromStorage } from "../config/location";
 import { AppTopBar } from "../components/common/AppTopBar";
 
 const CURRENT_OPERATOR_ID_KEY = "stocklens_current_operator_id";
+const CURRENT_PRINTER_ID_KEY = "stocklens_current_printer_id";
 
 type RowFilter = "all" | "unchecked" | "mismatched";
 
@@ -92,6 +97,42 @@ export function UncheckedPage() {
   const [rowFilter, setRowFilter] = useState<RowFilter>("all");
   const [locationName, setLocationName] = useState("");
   const [errorText, setErrorText] = useState("");
+  const [selectedPrinterId, setSelectedPrinterId] = useState<number | null>(null);
+  const [printing, setPrinting] = useState(false);
+
+  useEffect(() => {
+    const storedPrinterId = parsePositiveInt(localStorage.getItem(CURRENT_PRINTER_ID_KEY));
+    if (storedPrinterId) {
+      setSelectedPrinterId(storedPrinterId);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPrinter() {
+      try {
+        const printers = await getPrinters();
+        if (cancelled) return;
+        const storedPrinterId = parsePositiveInt(localStorage.getItem(CURRENT_PRINTER_ID_KEY));
+        const validStored =
+          storedPrinterId && printers.some((row) => row.id === storedPrinterId)
+            ? storedPrinterId
+            : null;
+        const defaultPrinter = printers.find((row) => row.defaultPrinter) || null;
+        const nextPrinterId = validStored || defaultPrinter?.id || null;
+        setSelectedPrinterId(nextPrinterId);
+        if (nextPrinterId) {
+          localStorage.setItem(CURRENT_PRINTER_ID_KEY, String(nextPrinterId));
+        }
+      } catch {
+        // Keep page usable if printer list fails. Print button will show a clear error when used.
+      }
+    }
+    void loadPrinter();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function loadUncheckedRows() {
     setLoading(true);
@@ -209,6 +250,72 @@ export function UncheckedPage() {
     () => rows.filter((row) => row.rowType === "mismatched").length,
     [rows]
   );
+  const rowFilterLabel = useMemo(() => {
+    if (rowFilter === "unchecked") {
+      return `Unchecked (${uncheckedCount})`;
+    }
+    if (rowFilter === "mismatched") {
+      return `Mismatched (${mismatchedCount})`;
+    }
+    return `All (${rows.length})`;
+  }, [mismatchedCount, rowFilter, rows.length, uncheckedCount]);
+
+  async function handlePrintFilteredRows() {
+    if (filteredRows.length === 0) {
+      presentToast({
+        message: "No rows available to print",
+        color: "warning",
+        duration: 1500,
+      });
+      return;
+    }
+
+    if (!selectedPrinterId) {
+      presentToast({
+        message: "Select printer first in Print page or set a default printer",
+        color: "warning",
+        duration: 1800,
+      });
+      return;
+    }
+
+    setPrinting(true);
+    try {
+      const backendFilter =
+        rowFilter === "mismatched" ? "unmatched" : rowFilter === "unchecked" ? "unchecked" : "unchecked";
+      const filterLabel =
+        rowFilter === "mismatched"
+          ? "MISMATCHED"
+          : rowFilter === "unchecked"
+            ? "UNCHECKED"
+            : "FILTERED UNCHECKED";
+
+      const result = await printVerificationList({
+        printerId: selectedPrinterId,
+        filter: backendFilter,
+        filterLabel,
+        filteredItems: filteredRows.map((row) => ({
+          shopLocationId: row.shopLocationId,
+          itemCode: row.itemCode,
+          displayName: `${row.brandName || row.itemName} | ${row.packValue || "-"} | ${row.itemName || "-"} | ${row.itemCode}`,
+        })),
+      });
+
+      presentToast({
+        message: result.message || "Print sent",
+        color: "success",
+        duration: 1800,
+      });
+    } catch (error) {
+      presentToast({
+        message: error instanceof Error ? error.message : "Print failed",
+        color: "danger",
+        duration: 2000,
+      });
+    } finally {
+      setPrinting(false);
+    }
+  }
 
   return (
     <IonPage>
@@ -234,6 +341,7 @@ export function UncheckedPage() {
               <IonLabel>Type</IonLabel>
               <IonSelect
                 value={rowFilter}
+                selectedText={rowFilterLabel}
                 interface="popover"
                 onIonChange={(event) => setRowFilter((event.detail.value as RowFilter) || "all")}
               >
@@ -295,6 +403,16 @@ export function UncheckedPage() {
               ? `${filteredRows.length} of ${rows.length} products match the selected filters`
               : `${rows.length} products are pending review in this cycle`}
           </div>
+
+          <IonButton
+            expand="block"
+            className="operator-print-nav-btn"
+            disabled={loading || printing || filteredRows.length === 0}
+            onClick={() => void handlePrintFilteredRows()}
+          >
+            {printing ? <IonSpinner name="crescent" /> : <IonIcon icon={printOutline} slot="start" />}
+            {printing ? "Printing..." : "Print Unchecked"}
+          </IonButton>
 
           {locationName ? <div className="verify-subtitle">Location: {locationName}</div> : null}
 

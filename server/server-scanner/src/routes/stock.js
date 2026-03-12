@@ -2755,24 +2755,60 @@ router.post("/print/verification-list", async (req, res) => {
     const preview = ["true", "1", "yes"].includes(
       String(req.body?.preview || "").trim().toLowerCase()
     );
+    const filteredItems = Array.isArray(req.body?.filteredItems)
+      ? req.body.filteredItems
+          .map((row) => ({
+            shopLocationId: parseOptionalPositiveInt(row?.shopLocationId),
+            itemCode: String(row?.itemCode || "").trim(),
+            displayName: String(row?.displayName || "").trim(),
+          }))
+          .filter((row) => row.shopLocationId && row.itemCode && row.displayName)
+      : [];
+    const customFilterLabel = String(req.body?.filterLabel || "")
+      .trim()
+      .toUpperCase();
     if (!dayRange) {
       return res.status(400).json({ success: false, message: "Invalid activityDate" });
     }
 
     const dataset = await buildVerificationDataset({ cycleId, dayRange });
-    const rowKey =
-      filter === "matched"
-        ? "matchedRows"
-        : filter === "unmatched"
-          ? "unmatchedRows"
-          : "uncheckedRows";
-    const sections = dataset.locationSummaries.map((section) => ({
-      label: section.label,
-      rows: section[rowKey] || [],
-    }));
+    let sections;
+
+    if (filteredItems.length > 0) {
+      const rowsByLocation = new Map();
+      filteredItems.forEach((row) => {
+        const key = `${row.shopLocationId}|${normalizeItemCode(row.itemCode)}`;
+        if (!rowsByLocation.has(row.shopLocationId)) {
+          rowsByLocation.set(row.shopLocationId, new Map());
+        }
+        rowsByLocation.get(row.shopLocationId).set(key, {
+          name: row.displayName,
+          itemCode: row.itemCode,
+        });
+      });
+
+      sections = dataset.locationSummaries
+        .map((section) => ({
+          label: section.label,
+          rows: sortNames(Array.from((rowsByLocation.get(section.locationId) || new Map()).values())),
+        }))
+        .filter((section) => section.rows.length > 0);
+    } else {
+      const rowKey =
+        filter === "matched"
+          ? "matchedRows"
+          : filter === "unmatched"
+            ? "unmatchedRows"
+            : "uncheckedRows";
+      sections = dataset.locationSummaries.map((section) => ({
+        label: section.label,
+        rows: section[rowKey] || [],
+      }));
+    }
+
     const html = generateVerificationFilterReportHTML({
       dayKey: dataset.dayKey,
-      filterLabel: filter.toUpperCase(),
+      filterLabel: customFilterLabel || filter.toUpperCase(),
       sections,
       generatedAt: dataset.generatedAt,
     });

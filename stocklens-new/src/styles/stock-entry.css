@@ -539,6 +539,26 @@
   color: #44546f;
 }
 
+.search-filter-item-button {
+  cursor: pointer;
+}
+
+.search-filter-item-value {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-filter-item-chevron {
+  margin-left: 6px;
+  font-size: 16px;
+  color: var(--color-text-secondary);
+}
+
 .search-filter-cancel-btn {
   --border-radius: 12px;
   --background: #fef2f2;
@@ -555,6 +575,53 @@
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.search-filter-popover::part(content) {
+  width: min(320px, calc(100vw - 32px));
+  border-radius: 16px;
+}
+
+.search-filter-popover-content {
+  max-height: min(420px, 60vh);
+  overflow: auto;
+  padding: 8px;
+  background: var(--color-bg);
+}
+
+.search-filter-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 4px 8px;
+  position: sticky;
+  top: 0;
+  background: var(--color-bg);
+  z-index: 1;
+}
+
+.search-filter-popover-row {
+  width: 100%;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 10px;
+  border-radius: 10px;
+  color: var(--color-text-primary);
+  text-align: left;
+  font-size: 14px;
+}
+
+.search-filter-popover-row:hover {
+  background: var(--color-bg-subtle);
+}
+
+.search-filter-popover-row input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
 }
 
 .search-wrapper {

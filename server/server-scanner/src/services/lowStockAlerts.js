@@ -2,6 +2,7 @@ const fs = require("fs");
 const { prisma } = require("../prisma");
 const { loadMasterProducts, masterFilePath } = require("./masterProducts");
 const { sendPushNotificationToMany } = require("./fcmPush");
+const { getActiveDeviceCutoff } = require("./pushTokenActivity");
 const LOW_STOCK_PRODUCT_STATE_RESET_DAY_KEY = "low_stock_product_notification_state_reset_day";
 
 function normalizeKey(value) {
@@ -356,6 +357,7 @@ async function evaluateLowStock(options = {}) {
   }
 
   const locationIds = locations.map((row) => row.id);
+  const activeDeviceCutoff = getActiveDeviceCutoff();
   const [configs, packRules, productRules, tokenRows] = await Promise.all([
     prisma.lowStockLocationConfig.findMany({ where: { shopLocationId: { in: locationIds } } }),
     prisma.lowStockPackRule.findMany({ where: { shopLocationId: { in: locationIds } } }),
@@ -364,6 +366,9 @@ async function evaluateLowStock(options = {}) {
       ? prisma.fcmDeviceToken.findMany({
           where: {
             active: true,
+            lastSeenAt: {
+              gte: activeDeviceCutoff,
+            },
             shopLocationId: { in: locationIds },
             phone: {
               is: {

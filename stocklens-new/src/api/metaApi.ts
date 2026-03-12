@@ -437,6 +437,16 @@ export async function registerFcmToken(payload: {
   return result.data;
 }
 
+export async function sendFcmHeartbeat(payload: {
+  token: string;
+  phoneId?: number | null;
+  shopLocationId?: number | null;
+  active?: boolean;
+}) {
+  const result = await apiPost<ApiEnvelope<FcmDeviceToken>>("/meta/push/heartbeat", payload);
+  return result.data;
+}
+
 export async function getLowStockSettings(shopLocationId: number) {
   const result = await apiGet<ApiEnvelope<LowStockSettings>>(`/meta/low-stock/settings/${shopLocationId}`);
   return result.data;

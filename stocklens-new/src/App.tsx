@@ -3,11 +3,8 @@ import { IonApp, IonContent, IonIcon, IonPage } from "@ionic/react";
 import { alertCircleOutline } from "ionicons/icons";
 import { AppRoutes } from "./routes/AppRoutes";
 import { APP_BUILD_NUMBER } from "./config/appVersion";
-import { getRequiredBuild, registerFcmToken } from "./api/metaApi";
-import { getFcmAlertLocationIdFromStorage } from "./config/fcm";
-import { getCurrentLocationIdFromStorage } from "./config/location";
-import { getCurrentPhoneIdFromStorage } from "./config/phone";
-import { initializeFcmToken } from "./services/fcm";
+import { getRequiredBuild } from "./api/metaApi";
+import { initializeFcmToken, startFcmConnectionHeartbeat } from "./services/fcm";
 
 const VERSION_CHECK_TIMEOUT_MS = 5000;
 
@@ -60,17 +57,7 @@ export function App() {
       try {
         const token = await initializeFcmToken({ requestPermission: true });
         if (!token) return;
-        const currentPhoneId = getCurrentPhoneIdFromStorage();
-        if (!currentPhoneId) {
-          return;
-        }
-
-        await registerFcmToken({
-          token,
-          phoneId: currentPhoneId,
-          shopLocationId: getFcmAlertLocationIdFromStorage() || getCurrentLocationIdFromStorage(),
-          active: true,
-        });
+        await startFcmConnectionHeartbeat();
       } catch (error) {
         console.warn("FCM setup failed:", error);
       }

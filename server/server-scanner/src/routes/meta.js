@@ -25,6 +25,7 @@ const {
   saveLocationNilStockSettings,
   runNilStockCheckAndNotify,
 } = require("../services/nilStockAlerts");
+const { getActiveDeviceCutoff, getActiveDeviceWindowMs } = require("../services/pushTokenActivity");
 
 const router = express.Router();
 
@@ -249,15 +250,66 @@ router.post("/push/register-token", async (req, res) => {
 router.get("/push/tokens", async (req, res) => {
   const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
   const activeOnly = parseOptionalBoolean(req.query.activeOnly, true);
+  const connectedOnly = parseOptionalBoolean(req.query.connectedOnly, false);
+  const activeDeviceCutoff = getActiveDeviceCutoff();
 
   const rows = await prisma.fcmDeviceToken.findMany({
     where: {
       ...(shopLocationId ? { shopLocationId } : {}),
       ...(activeOnly ? { active: true } : {}),
+      ...(connectedOnly
+        ? {
+            active: true,
+            lastSeenAt: {
+              gte: activeDeviceCutoff,
+            },
+          }
+        : {}),
     },
     orderBy: [{ id: "asc" }],
   });
-  return res.json({ success: true, count: rows.length, rows });
+  return res.json({
+    success: true,
+    count: rows.length,
+    connectedOnly,
+    activeWindowMs: getActiveDeviceWindowMs(),
+    rows,
+  });
+});
+
+router.post("/push/heartbeat", async (req, res) => {
+  const token = String(req.body?.token || "").trim();
+  const phoneId = parseOptionalPositiveInt(req.body?.phoneId);
+  const shopLocationId = parseOptionalPositiveInt(req.body?.shopLocationId);
+  const active = parseOptionalBoolean(req.body?.active, true);
+
+  if (!token) {
+    return res.status(400).json({ success: false, message: "token is required" });
+  }
+
+  const row = await prisma.fcmDeviceToken.findUnique({
+    where: { token },
+  });
+
+  if (!row) {
+    return res.status(404).json({ success: false, message: "Token not registered on this server" });
+  }
+
+  const updated = await prisma.fcmDeviceToken.update({
+    where: { token },
+    data: {
+      phoneId: phoneId || row.phoneId || null,
+      shopLocationId: shopLocationId || row.shopLocationId || null,
+      active,
+      lastSeenAt: new Date(),
+    },
+  });
+
+  return res.json({
+    success: true,
+    activeWindowMs: getActiveDeviceWindowMs(),
+    data: updated,
+  });
 });
 
 router.get("/low-stock/settings/:shopLocationId", async (req, res) => {
