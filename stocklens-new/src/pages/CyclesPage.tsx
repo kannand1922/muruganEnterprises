@@ -96,8 +96,21 @@ export function CyclesPage() {
     }
     setLoading(true);
     try {
-      await stopCycle(summary.cycle.id);
+      const result = await stopCycle(summary.cycle.id);
       presentToast({ message: "Cycle closed", color: "success", duration: 1400 });
+      if (result.print) {
+        presentToast({
+          message:
+            result.print.message ||
+            (result.print.success
+              ? "Full-cycle print sent"
+              : result.print.skipped
+                ? "Full-cycle print skipped"
+                : "Full-cycle print failed"),
+          color: result.print.success ? "success" : result.print.skipped ? "warning" : "danger",
+          duration: 2200,
+        });
+      }
       await loadSummary();
     } catch (error) {
       presentToast({

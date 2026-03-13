@@ -60,6 +60,11 @@ export async function stopCycle(cycleId?: number, endDate?: string) {
       endDate?: string | null;
       status: "active" | "inactive";
     };
+    print?: {
+      success: boolean;
+      skipped?: boolean;
+      message?: string;
+    } | null;
   }>("/cycles/stop", { cycleId, endDate });
 }
 

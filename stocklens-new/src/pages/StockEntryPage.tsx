@@ -29,7 +29,6 @@ import {
   addOutline,
   barcodeOutline,
   cameraOutline,
-  checkmarkCircle,
   chevronForwardOutline,
   closeOutline,
   cubeOutline,
@@ -106,14 +105,6 @@ type GroupedSearchResult = {
   packSizes: SearchResult[];
   itemCodes: string[];
   matchScore: number;
-};
-
-type ScannedEntry = {
-  id: string;
-  rawValue: string;
-  matched: boolean;
-  product?: MasterProduct;
-  scannedAt: string;
 };
 
 function getFieldValue(value: string | number | null | undefined) {
@@ -513,7 +504,6 @@ export function StockEntryPage() {
 
   const [isScanning, setIsScanning] = useState(false);
   const [cameraError, setCameraError] = useState("");
-  const [scannedEntries, setScannedEntries] = useState<ScannedEntry[]>([]);
   const [canScan, setCanScan] = useState(true);
   const [cooldownTimeLeft, setCooldownTimeLeft] = useState(0);
 
@@ -1312,7 +1302,7 @@ export function StockEntryPage() {
     history.replace("/dashboard");
   }
 
-  function openProductEditor(product: MasterProduct) {
+  function openProductEditor(product: MasterProduct, source: "scan" | "manual" = "manual") {
     if (isMasterBlocked) {
       presentToast({
         message: "Master CSV is stale. Update brands.csv to continue.",
@@ -1323,17 +1313,22 @@ export function StockEntryPage() {
     }
 
     const safeBpc = Number(product.bpc) || 12;
-    const existing = unfinishedRows.find(
-      (row) =>
-        row.itemCode === product.itemCode &&
-        row.shopLocationId === currentLocationId &&
-        getActivityDateKey(row.activityDate) === todayKey
-    );
-    // Prefill should come only from unfinished table; no fallback from master.
-    if (existing) {
-      const starting = bottlesToPackBottle(existing.quantityBottles, safeBpc);
-      setPackQty(starting.packs ? String(starting.packs) : "");
-      setBottleQty(starting.bottles ? String(starting.bottles) : "");
+    if (source === "scan") {
+      const existing = unfinishedRows.find(
+        (row) =>
+          row.itemCode === product.itemCode &&
+          row.shopLocationId === currentLocationId &&
+          getActivityDateKey(row.activityDate) === todayKey
+      );
+      // Prefill only for camera scans, and only from unfinished table.
+      if (existing) {
+        const starting = bottlesToPackBottle(existing.quantityBottles, safeBpc);
+        setPackQty(starting.packs ? String(starting.packs) : "");
+        setBottleQty(starting.bottles ? String(starting.bottles) : "");
+      } else {
+        setPackQty("");
+        setBottleQty("");
+      }
     } else {
       setPackQty("");
       setBottleQty("");
@@ -1349,22 +1344,13 @@ export function StockEntryPage() {
       masterRows.find((row) => getFieldValue(row.itemCode).toLowerCase() === normalized) ||
       null;
 
-    const entry: ScannedEntry = {
-      id: `scan_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      rawValue,
-      matched: Boolean(matched),
-      product: matched || undefined,
-      scannedAt: new Date().toISOString(),
-    };
-    setScannedEntries((prev) => [entry, ...prev].slice(0, 60));
-
     if (matched) {
       void stopScanning();
-      openProductEditor(matched);
+      openProductEditor(matched, "scan");
       presentToast({ message: `Scanned ${matched.itemCode}`, color: "success", duration: 1200 });
       return;
     }
-    presentToast({ message: "Product not found in master list", color: "warning", duration: 1300 });
+    presentToast({ message: "Barcode doesn't match any product", color: "warning", duration: 1400 });
   }
 
   function clearSearchAndResults() {
@@ -1401,7 +1387,7 @@ export function StockEntryPage() {
     if (resolvedMode === "barcode" && trimmed.includes(".")) {
       const exactMatch = masterRows.find((item) => getFieldValue(item.itemCode).toLowerCase() === trimmed);
       if (exactMatch && !isMatchedItemForLocation(exactMatch)) {
-        openProductEditor(exactMatch);
+      openProductEditor(exactMatch, "manual");
         setShowSearchResults(false);
         return;
       }
@@ -1471,7 +1457,7 @@ export function StockEntryPage() {
 
   function onSelectGroup(group: GroupedSearchResult) {
     if (group.packSizes.length === 1) {
-      openProductEditor(group.packSizes[0]);
+      openProductEditor(group.packSizes[0], "manual");
       clearSearchAndResults();
       return;
     }
@@ -1498,7 +1484,7 @@ export function StockEntryPage() {
     const fromStockEditor = showStockModal;
     setShowPackSizeModal(false);
     setSelectedGroup(null);
-    openProductEditor(row);
+    openProductEditor(row, "manual");
     if (!fromStockEditor) {
       setSearchQuery("");
       setGroupedSearchResults([]);
@@ -1888,39 +1874,8 @@ export function StockEntryPage() {
                   </div>
                 ) : showSearchResults && searchQuery.trim().length >= 2 ? (
                   <div className="stock-empty">No products found.</div>
-                ) : scannedEntries.length > 0 ? (
-                  <div className="search-results-container">
-                    {scannedEntries.map((entry) => (
-                      <div
-                        key={entry.id}
-                        className={`search-result-items ${entry.matched ? "" : "unmatched-result"}`}
-                        onClick={() => {
-                          if (entry.product) {
-                            openProductEditor(entry.product);
-                          }
-                        }}
-                      >
-                        <div className="result-main">
-                          <div className="result-header">
-                            <h3 className="result-brand">
-                              {entry.product?.brandName || "Unmatched Scan"}
-                            </h3>
-                          </div>
-                          <div className="result-details">
-                            <span className="result-item-name">
-                              {entry.product?.itemName || entry.rawValue}
-                            </span>
-                          </div>
-                          <div className="result-code-line">
-                            {entry.product?.itemCode ? `Code: ${entry.product.itemCode}` : `Raw: ${entry.rawValue}`}
-                          </div>
-                        </div>
-                        {entry.matched ? <IonIcon icon={checkmarkCircle} color="success" /> : null}
-                      </div>
-                    ))}
-                  </div>
                 ) : (
-                  <div className="stock-empty">No scans yet.</div>
+                  <div className="stock-empty">Scan a barcode to open the product.</div>
                 )}
               </div>
             ) : showSearchResults && filteredGroupedResults.length > 0 ? (

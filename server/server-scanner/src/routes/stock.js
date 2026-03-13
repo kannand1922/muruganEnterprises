@@ -35,6 +35,22 @@ function getUtcDayRange(activityDate) {
   return { dayKey, dayStart, dayEnd };
 }
 
+function getUtcCycleRange(cycle, endDateOverride) {
+  const startDate = parseDate(cycle?.startDate);
+  const endDate = parseDate(endDateOverride || cycle?.endDate || new Date());
+  if (!startDate || !endDate) return null;
+  const startKey = startDate.toISOString().slice(0, 10);
+  const endKey = endDate.toISOString().slice(0, 10);
+  const dayStart = new Date(`${startKey}T00:00:00.000Z`);
+  const dayEnd = new Date(`${endKey}T23:59:59.999Z`);
+  if (Number.isNaN(dayStart.getTime()) || Number.isNaN(dayEnd.getTime())) {
+    return null;
+  }
+  const snoLabel = cycle?.sno ? `CYCLE-${cycle.sno}` : `CYCLE-${startKey}`;
+  const dayKey = `${snoLabel}-${startKey}-to-${endKey}`;
+  return { dayKey, dayStart, dayEnd, startKey, endKey };
+}
+
 function normalizeLocationKey(value) {
   return String(value || "")
     .toLowerCase()
@@ -727,6 +743,138 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
       timeZone: "Asia/Kolkata",
     }),
   };
+}
+
+function getVerificationSections(dataset, filter) {
+  const rowKey =
+    filter === "matched"
+      ? "matchedRows"
+      : filter === "unmatched"
+        ? "unmatchedRows"
+        : "uncheckedRows";
+  return dataset.locationSummaries.map((section) => ({
+    label: section.label,
+    rows: section[rowKey] || [],
+  }));
+}
+
+async function printFullCycleVerification({ cycleId, endDate } = {}) {
+  const resolvedCycle =
+    cycleId != null
+      ? await prisma.cycle.findUnique({ where: { id: Number(cycleId) } })
+      : await prisma.cycle.findFirst({
+          where: { status: "active" },
+          orderBy: [{ startDate: "desc" }],
+        });
+
+  if (!resolvedCycle) {
+    return {
+      success: false,
+      skipped: true,
+      message: "Cycle not found. Print skipped.",
+    };
+  }
+
+  const cycleRange = getUtcCycleRange(resolvedCycle, endDate);
+  if (!cycleRange) {
+    return {
+      success: false,
+      skipped: true,
+      message: "Invalid cycle date range. Print skipped.",
+    };
+  }
+
+  const printerRow = await prisma.printer.findFirst({
+    where: { defaultPrinter: true },
+    orderBy: [{ id: "asc" }],
+  });
+
+  if (!printerRow) {
+    return {
+      success: false,
+      skipped: true,
+      message: "No default printer selected. Print skipped.",
+    };
+  }
+
+  try {
+    const dataset = await buildVerificationDataset({
+      cycleId: resolvedCycle.id,
+      dayRange: cycleRange,
+    });
+
+    const reportHtml = generateVerificationReportHTML(dataset);
+    const reportResult = await sendHtmlToPrinter(
+      printerRow,
+      reportHtml,
+      `verification_report_${dataset.dayKey}`
+    );
+
+    const matchedSections = getVerificationSections(dataset, "matched");
+    const matchedHtml = generateVerificationFilterReportHTML({
+      dayKey: dataset.dayKey,
+      filterLabel: "MATCHED",
+      sections: matchedSections,
+      generatedAt: dataset.generatedAt,
+    });
+    const matchedResult = await sendHtmlToPrinter(
+      printerRow,
+      matchedHtml,
+      `verification_matched_${dataset.dayKey}`
+    );
+
+    const unmatchedSections = getVerificationSections(dataset, "unmatched");
+    const unmatchedHtml = generateVerificationFilterReportHTML({
+      dayKey: dataset.dayKey,
+      filterLabel: "UNMATCHED",
+      sections: unmatchedSections,
+      generatedAt: dataset.generatedAt,
+    });
+    const unmatchedResult = await sendHtmlToPrinter(
+      printerRow,
+      unmatchedHtml,
+      `verification_unmatched_${dataset.dayKey}`
+    );
+
+    const uncheckedSections = getVerificationSections(dataset, "unchecked");
+    const uncheckedHtml = generateVerificationFilterReportHTML({
+      dayKey: dataset.dayKey,
+      filterLabel: "UNCHECKED",
+      sections: uncheckedSections,
+      generatedAt: dataset.generatedAt,
+    });
+    const uncheckedResult = await sendHtmlToPrinter(
+      printerRow,
+      uncheckedHtml,
+      `verification_unchecked_${dataset.dayKey}`
+    );
+
+    return {
+      success: true,
+      skipped: false,
+      message: "Full-cycle verification report + lists printed.",
+      cycleId: resolvedCycle.id,
+      dayKey: dataset.dayKey,
+      printer: {
+        id: printerRow.id,
+        name: printerRow.name,
+        ipAddress: printerRow.ipAddress,
+        port: printerRow.port,
+      },
+      results: {
+        report: reportResult,
+        matched: matchedResult,
+        unmatched: unmatchedResult,
+        unchecked: uncheckedResult,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      skipped: false,
+      message: error instanceof Error ? error.message : "Failed to print full-cycle verification",
+    };
+  }
 }
 
 function getCycleDateLabel(cycle) {
@@ -3239,3 +3387,4 @@ router.post("/events/reset", async (req, res) => {
 });
 
 module.exports = router;
+module.exports.printFullCycleVerification = printFullCycleVerification;

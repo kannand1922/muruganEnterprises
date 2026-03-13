@@ -1,6 +1,8 @@
 const express = require("express");
 const { prisma } = require("../prisma");
 const { verifySettingsPassword } = require("../services/settingsPassword");
+const stockRouter = require("./stock");
+const { printFullCycleVerification } = stockRouter;
 
 const router = express.Router();
 
@@ -155,7 +157,22 @@ router.post("/stop", async (req, res) => {
     },
   });
 
-  return res.json({ success: true, cycle: updated });
+  let print = null;
+  try {
+    print = await printFullCycleVerification({
+      cycleId: updated.id,
+      endDate: resolvedEnd,
+    });
+  } catch (error) {
+    print = {
+      success: false,
+      skipped: false,
+      message:
+        error instanceof Error ? error.message : "Failed to print full-cycle verification",
+    };
+  }
+
+  return res.json({ success: true, cycle: updated, print });
 });
 
 router.post("/force-close", async (req, res) => {
