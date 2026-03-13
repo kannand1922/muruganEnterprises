@@ -1312,11 +1312,9 @@ function generateOperatorDifferenceIndividualHTML(data) {
     <table>
       <thead>
         <tr>
-          <th style="width: 16%;">Loc</th>
-          <th style="width: 40%;">Name</th>
-          <th style="width: 14%;">Curr</th>
-          <th style="width: 14%;">S</th>
-          <th style="width: 16%;">Diff</th>
+          <th style="width: 22%;">Loc</th>
+          <th style="width: 56%;">Name</th>
+          <th style="width: 22%;">Diff</th>
         </tr>
       </thead>
       <tbody>
@@ -1326,8 +1324,6 @@ function generateOperatorDifferenceIndividualHTML(data) {
           <tr>
             <td>${item.location}</td>
             <td>${item.name}</td>
-            <td>${item.master}</td>
-            <td>${item.scanned}</td>
             <td>${item.diffLabel}</td>
           </tr>
         `
