@@ -21,6 +21,10 @@ const STOCK_LENS_MASTER_MAX_AGE_FILE = path.join(
   CONFIG_DIR,
   "master-max-age-minutes.txt"
 );
+const STOCK_LENS_DIFF_IMAGE_PATH_FILE = path.join(
+  CONFIG_DIR,
+  "diff-image-path.txt"
+);
 
 const stockLensPaths = {
   dataDir: STOCK_LENS_DIR,
@@ -58,6 +62,7 @@ const stockLensScannerConfigPaths = {
   settingsPasswordFile: STOCK_LENS_SETTINGS_PASSWORD_FILE,
   requiredBuildFile: STOCK_LENS_REQUIRED_BUILD_FILE,
   masterMaxAgeMinutesFile: STOCK_LENS_MASTER_MAX_AGE_FILE,
+  diffImagePathFile: STOCK_LENS_DIFF_IMAGE_PATH_FILE,
 };
 
 module.exports = {

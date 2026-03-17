@@ -992,6 +992,26 @@
   transform: scale(0.97);
 }
 
+.operator-diff-nav-btn {
+  --border-radius: 12px;
+  --background: #ecfeff;
+  --background-activated: #cffafe;
+  --background-hover: #cffafe;
+  --color: #155e75;
+  --border-width: 2px;
+  --border-color: #0891b2;
+  font-weight: 600;
+  font-size: 13px;
+  min-height: 42px;
+  margin: 0;
+  padding: 6px 10px;
+  transition: transform var(--transition-fast);
+}
+
+.operator-diff-nav-btn:active, .operator-diff-nav-btn:hover {
+  transform: scale(0.97);
+}
+
 .operator-print-nav-btn {
   --border-radius: 12px;
   --background: #e0e7ff;
@@ -1119,6 +1139,31 @@ body.barcode-scanner-active ion-content,
 body.barcode-scanner-active .ion-content {
   background: transparent !important;
   --background: transparent !important;
+}
+
+.web-scanner-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 12;
+  background: #000;
+}
+
+.web-scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.web-scanner-frame {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: min(70vw, 280px);
+  height: min(45vh, 220px);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 16px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
 }
 
 /* Location badge — shop color as left border only */
@@ -1674,6 +1719,63 @@ body.barcode-scanner-active .ion-content {
   border-bottom: none;
 }
 
+/* Difference page */
+.difference-create-btn {
+  --border-radius: 8px;
+  --background: #0ea5e9;
+  --background-activated: #0284c7;
+  --background-hover: #0284c7;
+  --color: #ffffff;
+  font-weight: 600;
+  min-height: 42px;
+  text-transform: none;
+  padding: 8px 18px;
+  margin: 0;
+}
+
+.diff-select-all-btn {
+  margin-left: auto;
+  --border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.difference-proof-modal .modal-wrapper {
+  --border-radius: 16px;
+}
+
+.difference-proof-content .difference-proof-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.difference-proof-item input[type="file"],
+.difference-proof-item input[type="text"] {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: #ffffff;
+  font-size: 14px;
+}
+
+.difference-proof-note {
+  font-size: 12px;
+}
+
+.difference-proof-submit {
+  --border-radius: 10px;
+  --background: #111827;
+  --background-hover: #0f172a;
+  --background-activated: #0f172a;
+  --color: #ffffff;
+  text-transform: none;
+  font-weight: 600;
+}
+
 /* Nil products */
 .nil-products-card {
   border: 1px solid var(--color-border);
@@ -2140,6 +2242,21 @@ body.barcode-scanner-active .ion-content {
   border-bottom: 1px solid var(--color-border);
 }
 
+.verify-row.is-selectable {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.verify-row-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.verify-row-checkbox {
+  margin-top: 4px;
+}
+
 .verify-row:last-child {
   border-bottom: none;
 }
@@ -2164,6 +2281,13 @@ body.barcode-scanner-active .ion-content {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.verify-diff-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
 }
 
 .verify-current-badge {

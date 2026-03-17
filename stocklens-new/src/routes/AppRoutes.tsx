@@ -11,6 +11,7 @@ import { FastMovingPage } from "../pages/FastMovingPage";
 import { PrintPage } from "../pages/PrintPage";
 import { VerifyPage } from "../pages/VerifyPage";
 import { UncheckedPage } from "../pages/UncheckedPage";
+import { DifferencePage } from "../pages/DifferencePage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { SettingsShopInfoPage } from "../pages/SettingsShopInfoPage";
 import { SettingsShopLocationsPage } from "../pages/SettingsShopLocationsPage";
@@ -24,6 +25,7 @@ import { SettingsLowStockAlertsPage } from "../pages/SettingsLowStockAlertsPage"
 import { SettingsNotificationConfigPage } from "../pages/SettingsNotificationConfigPage";
 import { SettingsLowStockNotificationsPage } from "../pages/SettingsLowStockNotificationsPage";
 import { SettingsLowStockThresholdsPage } from "../pages/SettingsLowStockThresholdsPage";
+import { SettingsDifferencePage } from "../pages/SettingsDifferencePage";
 import { StockLowStockPage } from "../pages/StockLowStockPage";
 import { SettingsUnlockPage } from "../pages/SettingsUnlockPage";
 import { SettingsProtectedRoute } from "./SettingsProtectedRoute";
@@ -42,6 +44,7 @@ export function AppRoutes() {
         <Route exact path="/stock/fast-moving" component={FastMovingPage} />
         <Route exact path="/stock/verify" component={VerifyPage} />
         <Route exact path="/stock/unchecked" component={UncheckedPage} />
+        <Route exact path="/stock/difference" component={DifferencePage} />
         <Route exact path="/stock/print" component={PrintPage} />
         <Route exact path="/stock/low-stock" component={StockLowStockPage} />
         <Route exact path="/settings-unlock" component={SettingsUnlockPage} />
@@ -57,6 +60,7 @@ export function AppRoutes() {
         <SettingsProtectedRoute exact path="/settings/fcm" component={SettingsFcmPage} />
         <SettingsProtectedRoute exact path="/settings/best-selling" component={SettingsBestSellingPage} />
         <SettingsProtectedRoute exact path="/settings/printers" component={SettingsPrintersPage} />
+        <SettingsProtectedRoute exact path="/settings/difference" component={SettingsDifferencePage} />
         <SettingsProtectedRoute
           exact
           path="/settings/low-stock-alerts/config"

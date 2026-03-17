@@ -42,6 +42,22 @@ const sanitizeReceiptBucket = (value, fallback = RECEIPT_BUCKETS.SHOP) => {
   return normalized || fallback;
 };
 
+const sanitizeReceiptSegment = (value, fallback = "report") => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "");
+  return normalized || fallback;
+};
+
+const getLocalDateKey = () => {
+  try {
+    return new Date().toLocaleDateString("en-CA");
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+};
+
 const getReceiptsBucketDir = (bucketName) => {
   const safeBucket = sanitizeReceiptBucket(bucketName, RECEIPT_BUCKETS.SHOP);
   return {
@@ -855,7 +871,9 @@ async function htmlToImageAndSave(
   uniqueCode,
   suffix = "",
   perf,
-  receiptBucket = RECEIPT_BUCKETS.SHOP
+  receiptBucket = RECEIPT_BUCKETS.SHOP,
+  subDir = "",
+  filePrefix = "receipt"
 ) {
   const browser = await getBrowserInstance();
   perf?.log(`Browser ready${suffix}`);
@@ -882,16 +900,13 @@ async function htmlToImageAndSave(
     });
 
     const bucketInfo = getReceiptsBucketDir(receiptBucket);
-    ensureDirExists(bucketInfo.dir);
+    const safeSubDir = String(subDir || "").trim().replace(/^\/+|\/+$/g, "");
+    const targetDir = safeSubDir ? path.join(bucketInfo.dir, safeSubDir) : bucketInfo.dir;
+    ensureDirExists(targetDir);
 
-    const htmlPath = path.join(
-      bucketInfo.dir,
-      `receipt_${uniqueCode}${suffix}.html`
-    );
-    const imagePath = path.join(
-      bucketInfo.dir,
-      `receipt_${uniqueCode}${suffix}.png`
-    );
+    const safePrefix = sanitizeReceiptSegment(filePrefix, "receipt");
+    const htmlPath = path.join(targetDir, `${safePrefix}_${uniqueCode}${suffix}.html`);
+    const imagePath = path.join(targetDir, `${safePrefix}_${uniqueCode}${suffix}.png`);
 
     fs.writeFileSync(htmlPath, html);
     perf?.log(`HTML saved${suffix}`);
@@ -1166,7 +1181,9 @@ async function printHtmlBlock(printer, htmlContent, jobLabel = "report", copies 
   }
 
   const sanitizedCopies = Math.max(1, parseInt(copies, 10) || 1);
-  const uniqueCode = `${jobLabel}_${Date.now()}`;
+  const safeJobLabel = sanitizeReceiptSegment(jobLabel, "report");
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const uniqueCode = `${safeJobLabel}_${timestamp}`;
   const perf = new PerformanceLogger(uniqueCode);
   perf.log("HTML print job received");
   
@@ -1175,7 +1192,9 @@ async function printHtmlBlock(printer, htmlContent, jobLabel = "report", copies 
     uniqueCode,
     "_custom",
     perf,
-    RECEIPT_BUCKETS.STOCKLENS
+    RECEIPT_BUCKETS.STOCKLENS,
+    path.join(safeJobLabel, getLocalDateKey()),
+    safeJobLabel
   );
   perf.log("HTML render complete");
 

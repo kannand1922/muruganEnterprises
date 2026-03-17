@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from "./httpClient";
+import { apiDelete, apiGet, apiPost } from "./httpClient";
 
 type ApiListEnvelope<T> = {
   success: boolean;
@@ -124,6 +124,64 @@ export type VerifyUncheckedFinishedRow = {
   cycleStatus: string;
   shopLocationId: number;
   shopLocationName: string;
+};
+
+export type DiffItem = {
+  id: number;
+  diffBatchId: number;
+  sourceScope: "unfinished" | "finished";
+  sourceUnfinishedId?: number | null;
+  sourceFinishedId?: number | null;
+  cycleId: number;
+  itemCode: string;
+  itemName?: string | null;
+  brandName?: string | null;
+  packValue?: string | null;
+  bpc?: number | null;
+  mrp?: number | null;
+  barcode?: string | null;
+  phoneId?: number | null;
+  phoneName?: string | null;
+  shopLocationId: number;
+  activityDate: string;
+  quantityBottles: number;
+  currentStockBottles: number;
+  diffBottles: number;
+  isMatched: boolean;
+  matchedAt?: string | null;
+  lastUpdatedByWorkerId?: number | null;
+  finishedAt?: string | null;
+  finishedByWorkerId?: number | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+};
+
+export type DiffBatch = {
+  id: number;
+  cycleId: number;
+  shopLocationId: number;
+  createdByWorkerId?: number | null;
+  proofImagePath?: string | null;
+  proofImageName?: string | null;
+  itemCount: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+  items?: DiffItem[];
+  cycle?: {
+    id: number;
+    sno?: number | null;
+    startDate: string;
+    endDate?: string | null;
+    status: string;
+  };
+  shopLocation?: {
+    id: number;
+    locationName: string;
+    locationCode: string;
+    locationColor?: string | null;
+  };
 };
 
 export async function getUnfinishedStock(cycleId: number, shopLocationId: number) {
@@ -376,20 +434,19 @@ export async function getFastMovingSummary(params: {
 }
 
 export async function getVerifyMismatchedFinished(params: {
-  operatorId: number;
+  operatorId?: number | null;
   cycleId?: number | null;
   shopLocationId?: number | null;
 }) {
-  const search = new URLSearchParams({
-    operatorId: String(params.operatorId),
-  });
+  const search = new URLSearchParams();
+  if (params.operatorId) search.set("operatorId", String(params.operatorId));
   if (params.cycleId) search.set("cycleId", String(params.cycleId));
   if (params.shopLocationId) search.set("shopLocationId", String(params.shopLocationId));
   return apiGet<{
     success: boolean;
     cycleId: number;
     cycleStatus: string;
-    operatorId: number;
+    operatorId: number | null;
     shopLocationId: number | null;
     count: number;
     rows: VerifyMismatchedFinishedRow[];
@@ -413,4 +470,65 @@ export async function getVerifyUncheckedFinished(params: {
     count: number;
     rows: VerifyUncheckedFinishedRow[];
   }>(`/stock/verify/unchecked-finished?${search.toString()}`);
+}
+
+export async function getDiffBatches(params: {
+  shopLocationId: number;
+  cycleId?: number | null;
+  includeDeleted?: boolean;
+}) {
+  const search = new URLSearchParams({
+    shopLocationId: String(params.shopLocationId),
+  });
+  if (params.cycleId) search.set("cycleId", String(params.cycleId));
+  if (params.includeDeleted) search.set("includeDeleted", "true");
+  return apiGet<{
+    success: boolean;
+    count: number;
+    rows: DiffBatch[];
+  }>(`/stock/diff-batches?${search.toString()}`);
+}
+
+export async function createDiffBatch(payload: {
+  cycleId: number;
+  shopLocationId: number;
+  sourceScope: "unfinished" | "finished";
+  itemIds: number[];
+  createdByWorkerId?: number | null;
+  proofImagePath?: string;
+  proofImageName?: string;
+}) {
+  return apiPost<{
+    success: boolean;
+    movedCount: number;
+    movedIds: number[];
+    batch: DiffBatch;
+    report?: {
+      batchId: number;
+      cycleDate: string;
+      locationLabel: string;
+      createdAt: string;
+      createdByName: string;
+      proofImagePath?: string;
+      totalItems: number;
+      totalDiff: string;
+      sections: Array<{ label: string; rows: Array<{ name: string; diffLabel: string }> }>;
+    };
+    print?: {
+      requested: boolean;
+      attempted: boolean;
+      success: boolean;
+      skipped: boolean;
+      message: string;
+    };
+  }>("/stock/diff-batches", payload);
+}
+
+export async function deleteDiffBatch(batchId: number) {
+  return apiDelete<{
+    success: boolean;
+    restoredUnfinished?: number;
+    restoredFinished?: number;
+    restoredCount?: number;
+  }>(`/stock/diff-batches/${encodeURIComponent(String(batchId))}`);
 }

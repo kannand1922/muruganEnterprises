@@ -761,3 +761,96 @@
 .locations-list .location-card {
   border-left: 3px solid var(--shop-color, var(--color-accent));
 }
+
+/* Difference settings */
+.settings-select-row {
+  margin-bottom: 12px;
+  --padding-start: 0;
+  --inner-padding-end: 0;
+}
+
+.settings-hint {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 12px;
+}
+
+.diff-accordion-group {
+  display: grid;
+  gap: 8px;
+}
+
+.diff-accordion {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.diff-accordion.is-deleted {
+  opacity: 0.55;
+  filter: grayscale(0.2);
+}
+
+.diff-accordion-header {
+  --background: var(--color-bg);
+}
+
+.diff-accordion-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-text-primary);
+}
+
+.diff-accordion-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.diff-accordion-content {
+  padding: 12px 16px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.diff-accordion-meta {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  display: grid;
+  gap: 4px;
+}
+
+.diff-batch-delete-btn {
+  --border-radius: 8px;
+  text-transform: none;
+  font-weight: 600;
+}
+
+.diff-item-list {
+  display: grid;
+  gap: 8px;
+}
+
+.diff-item-row {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-subtle);
+}
+
+.diff-item-row.is-deleted {
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+
+.diff-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.diff-item-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}

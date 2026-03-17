@@ -40,6 +40,8 @@ model ShopLocation {
 
   unfinishedStocks CycleUnfinishedStock[]
   finishedStocks   CycleFinishedStock[]
+  diffBatches      DiffBatch[]
+  diffItems        DiffItem[]
   events           CycleProductEvent[]
   nilForShop       ShopInfo[]
   lowStockConfig   LowStockLocationConfig?
@@ -67,6 +69,8 @@ model Cycle {
 
   unfinishedStocks CycleUnfinishedStock[]
   finishedStocks   CycleFinishedStock[]
+  diffBatches      DiffBatch[]
+  diffItems        DiffItem[]
   events           CycleProductEvent[]
   operatorDailyMismatchSummaries OperatorDailyMismatchSummary[]
 
@@ -198,6 +202,9 @@ model Worker {
   unfinishedUpdatedRows CycleUnfinishedStock[] @relation("UnfinishedUpdatedBy")
   finishedUpdatedRows   CycleFinishedStock[]   @relation("FinishedUpdatedBy")
   finishedByRows        CycleFinishedStock[]   @relation("FinishedBy")
+  diffCreatedBatches    DiffBatch[]            @relation("DiffBatchCreatedBy")
+  diffUpdatedRows       DiffItem[]             @relation("DiffUpdatedBy")
+  diffFinishedByRows    DiffItem[]             @relation("DiffFinishedBy")
   events                CycleProductEvent[]
   operatorDailyMismatchSummaries OperatorDailyMismatchSummary[]
 
@@ -226,10 +233,74 @@ model Phone {
 
   unfinishedRows CycleUnfinishedStock[] @relation("UnfinishedPhone")
   finishedRows   CycleFinishedStock[]   @relation("FinishedPhone")
+  diffRows       DiffItem[]             @relation("DiffPhone")
   events         CycleProductEvent[]
   fcmDeviceTokens FcmDeviceToken[]
 
   @@map("phones")
+}
+
+model DiffBatch {
+  id                Int      @id @default(autoincrement())
+  cycleId           Int      @map("cycle_id")
+  shopLocationId    Int      @map("shop_location_id")
+  createdByWorkerId Int?     @map("created_by_worker_id")
+  proofImagePath    String?  @map("proof_image_path")
+  proofImageName    String?  @map("proof_image_name")
+  itemCount         Int      @default(0) @map("item_count")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  deletedAt         DateTime? @map("deleted_at")
+
+  cycle        Cycle        @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Restrict)
+  createdBy    Worker?      @relation("DiffBatchCreatedBy", fields: [createdByWorkerId], references: [id], onDelete: SetNull)
+  items        DiffItem[]
+
+  @@index([cycleId, shopLocationId], map: "idx_diff_batches_cycle_location")
+  @@map("diff_batches")
+}
+
+model DiffItem {
+  id                    Int      @id @default(autoincrement())
+  diffBatchId           Int      @map("diff_batch_id")
+  sourceScope           String   @map("source_scope")
+  sourceUnfinishedId    Int?     @map("source_unfinished_id")
+  sourceFinishedId      Int?     @map("source_finished_id")
+  cycleId               Int      @map("cycle_id")
+  itemCode              String   @map("item_code")
+  itemName              String?  @map("item_name")
+  brandName             String?  @map("brand_name")
+  packValue             String?  @map("pack_value")
+  bpc                   Int?
+  mrp                   Float?
+  barcode               String?
+  phoneId               Int?     @map("phone_id")
+  phoneName             String?  @map("phone_name")
+  shopLocationId        Int      @map("shop_location_id")
+  activityDate          DateTime @map("activity_date")
+  quantityBottles       Int      @default(0) @map("quantity_bottles")
+  currentStockBottles   Int      @default(0) @map("current_stock_bottles")
+  diffBottles           Int      @default(0) @map("diff_bottles")
+  isMatched             Boolean  @default(false) @map("is_matched")
+  matchedAt             DateTime? @map("matched_at")
+  lastUpdatedByWorkerId Int?      @map("last_updated_by_worker_id")
+  finishedAt            DateTime? @map("finished_at")
+  finishedByWorkerId    Int?      @map("finished_by_worker_id")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  deletedAt             DateTime? @map("deleted_at")
+
+  diffBatch     DiffBatch    @relation(fields: [diffBatchId], references: [id], onDelete: Cascade)
+  cycle         Cycle        @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  shopLocation  ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Restrict)
+  lastUpdatedBy Worker?      @relation("DiffUpdatedBy", fields: [lastUpdatedByWorkerId], references: [id], onDelete: SetNull)
+  finishedBy    Worker?      @relation("DiffFinishedBy", fields: [finishedByWorkerId], references: [id], onDelete: SetNull)
+  phone         Phone?       @relation("DiffPhone", fields: [phoneId], references: [id], onDelete: SetNull)
+
+  @@index([diffBatchId], map: "idx_diff_items_batch")
+  @@index([cycleId, shopLocationId], map: "idx_diff_items_cycle_location")
+  @@map("diff_items")
 }
 
 model LowStockLocationConfig {

@@ -1,22 +1,26 @@
 import {
   IonBadge,
   IonButton,
+  IonCheckbox,
   IonContent,
   IonIcon,
   IonItem,
   IonLabel,
+  IonModal,
   IonPage,
   IonSearchbar,
   IonSelect,
   IonSelectOption,
   IonSpinner,
+  IonText,
   useIonToast,
 } from "@ionic/react";
-import { printOutline } from "ionicons/icons";
+import { cloudUploadOutline, closeOutline, printOutline } from "ionicons/icons";
 import { useEffect, useMemo, useState } from "react";
 import { getCurrentCycle } from "../api/cyclesApi";
 import { getPrinters } from "../api/metaApi";
 import {
+  createDiffBatch,
   getVerifyUncheckedFinished,
   getVerifyMismatchedFinished,
   printVerificationList,
@@ -99,6 +103,13 @@ export function UncheckedPage() {
   const [errorText, setErrorText] = useState("");
   const [selectedPrinterId, setSelectedPrinterId] = useState<number | null>(null);
   const [printing, setPrinting] = useState(false);
+  const [activeCycleId, setActiveCycleId] = useState<number | null>(null);
+  const [currentLocationId, setCurrentLocationId] = useState<number | null>(null);
+  const [selectedMismatchIds, setSelectedMismatchIds] = useState<Set<number>>(new Set());
+  const [showProofModal, setShowProofModal] = useState(false);
+  const [proofPathInput, setProofPathInput] = useState("");
+  const [proofFileName, setProofFileName] = useState("");
+  const [creatingDiff, setCreatingDiff] = useState(false);
 
   useEffect(() => {
     const storedPrinterId = parsePositiveInt(localStorage.getItem(CURRENT_PRINTER_ID_KEY));
@@ -141,36 +152,37 @@ export function UncheckedPage() {
       const currentLocationId = getCurrentLocationIdFromStorage();
       if (!currentLocationId) {
         setRows([]);
+        setCurrentLocationId(null);
         setErrorText("Select location first in stock entry page.");
         return;
       }
+      setCurrentLocationId(currentLocationId);
 
       const cycleResult = await getCurrentCycle();
       if (!cycleResult.active || !cycleResult.cycle?.id) {
         setRows([]);
+        setActiveCycleId(null);
         setErrorText("No active cycle. Start a cycle first.");
         return;
       }
+      setActiveCycleId(cycleResult.cycle.id);
 
-      const operatorId = parsePositiveInt(localStorage.getItem(CURRENT_OPERATOR_ID_KEY));
       const [uncheckedResult, mismatchedResult] = await Promise.all([
         getVerifyUncheckedFinished({
           cycleId: cycleResult.cycle.id,
           shopLocationId: currentLocationId,
         }),
-        operatorId
-          ? getVerifyMismatchedFinished({
-              operatorId,
-              cycleId: cycleResult.cycle.id,
-              shopLocationId: currentLocationId,
-            })
-          : Promise.resolve({ rows: [] as VerifyMismatchedFinishedRow[] }),
+        getVerifyMismatchedFinished({
+          cycleId: cycleResult.cycle.id,
+          shopLocationId: currentLocationId,
+        }),
       ]);
 
       setRows([
         ...(uncheckedResult.rows || []).map(mapUncheckedRow),
         ...(mismatchedResult.rows || []).map(mapMismatchedRow),
       ]);
+      setSelectedMismatchIds(new Set());
       setLocationName(uncheckedResult.shopLocationName || mismatchedResult.rows?.[0]?.shopLocationName || "");
     } catch (error) {
       setRows([]);
@@ -317,6 +329,77 @@ export function UncheckedPage() {
     }
   }
 
+  const mismatchedRows = useMemo(
+    () => filteredRows.filter((row) => row.rowType === "mismatched" && row.id),
+    [filteredRows]
+  );
+  const selectedMismatchCount = selectedMismatchIds.size;
+
+  function toggleMismatchSelection(row: CombinedVerifyRow) {
+    if (row.rowType !== "mismatched" || !row.id) return;
+    setSelectedMismatchIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(row.id!)) {
+        next.delete(row.id!);
+      } else {
+        next.add(row.id!);
+      }
+      return next;
+    });
+  }
+
+  async function handleCreateDiff() {
+    if (!activeCycleId || !currentLocationId) {
+      presentToast({
+        message: "Select an active cycle and shop location first.",
+        color: "warning",
+        duration: 1500,
+      });
+      return;
+    }
+    if (selectedMismatchIds.size === 0) {
+      presentToast({ message: "Select mismatched rows to move.", color: "warning", duration: 1400 });
+      return;
+    }
+    setShowProofModal(true);
+  }
+
+  async function submitDiffBatch() {
+    if (!activeCycleId || !currentLocationId) return;
+    const operatorId = parsePositiveInt(localStorage.getItem(CURRENT_OPERATOR_ID_KEY));
+    setCreatingDiff(true);
+    try {
+      const result = await createDiffBatch({
+        cycleId: activeCycleId,
+        shopLocationId: currentLocationId,
+        sourceScope: "finished",
+        itemIds: Array.from(selectedMismatchIds),
+        createdByWorkerId: operatorId,
+        proofImagePath: proofPathInput.trim() || undefined,
+        proofImageName: proofFileName.trim() || undefined,
+      });
+      const printMessage = result.print?.message ? ` ${result.print.message}` : "";
+      const toastColor = result.print && !result.print.success && !result.print.skipped ? "warning" : "success";
+      presentToast({
+        message: `${result.movedCount} item(s) moved to diff batch #${result.batch.id}.${printMessage}`,
+        color: toastColor,
+        duration: 2200,
+      });
+      setShowProofModal(false);
+      setProofPathInput("");
+      setProofFileName("");
+      await loadUncheckedRows();
+    } catch (error) {
+      presentToast({
+        message: error instanceof Error ? error.message : "Failed to create diff batch",
+        color: "danger",
+        duration: 2000,
+      });
+    } finally {
+      setCreatingDiff(false);
+    }
+  }
+
   return (
     <IonPage>
       <AppTopBar
@@ -414,6 +497,22 @@ export function UncheckedPage() {
             {printing ? "Printing..." : "Print Unchecked"}
           </IonButton>
 
+          {mismatchedRows.length > 0 ? (
+            <div className="verify-diff-summary">
+              <IonBadge color="warning">Mismatched: {mismatchedRows.length}</IonBadge>
+              <IonBadge color="medium">Selected: {selectedMismatchCount}</IonBadge>
+            </div>
+          ) : null}
+
+          <IonButton
+            expand="block"
+            className="difference-create-btn"
+            disabled={loading || creatingDiff || selectedMismatchCount === 0}
+            onClick={() => void handleCreateDiff()}
+          >
+            {creatingDiff ? "Creating..." : "Create Diff"}
+          </IonButton>
+
           {locationName ? <div className="verify-subtitle">Location: {locationName}</div> : null}
 
           {loading ? (
@@ -433,29 +532,97 @@ export function UncheckedPage() {
               {filteredRows.map((row) => (
                 <div
                   key={`${row.rowType}_${row.shopLocationId}_${row.itemCode}_${row.packValue}_${row.id || "base"}`}
-                  className="verify-row"
+                  className={`verify-row ${row.rowType === "mismatched" ? "is-selectable" : ""}`}
                 >
-                  <div className="verify-row-title">
-                    {row.brandName || row.itemName}
-                    <IonBadge color={row.rowType === "unchecked" ? "medium" : "warning"} style={{ marginLeft: 8 }}>
-                      {row.rowType === "unchecked" ? "Unchecked" : "Mismatched"}
-                    </IonBadge>
-                  </div>
-                  <div className="verify-row-meta">
-                    {row.packValue || "-"} • {row.itemName || "-"} • Code: {row.itemCode}
-                  </div>
                   {row.rowType === "mismatched" ? (
-                    <div className="verify-row-meta">
-                      Entered: {row.enteredFormatted || "-"} • Current: {row.currentStockFormatted || "-"} • Diff:{" "}
-                      {row.diffFormatted || "-"}
-                    </div>
+                    <IonCheckbox
+                      className="verify-row-checkbox"
+                      checked={row.id ? selectedMismatchIds.has(row.id) : false}
+                      onIonChange={() => toggleMismatchSelection(row)}
+                    />
                   ) : null}
+                  <div className="verify-row-body">
+                    <div className="verify-row-title">
+                      {row.brandName || row.itemName}
+                      <IonBadge color={row.rowType === "unchecked" ? "medium" : "warning"} style={{ marginLeft: 8 }}>
+                        {row.rowType === "unchecked" ? "Unchecked" : "Mismatched"}
+                      </IonBadge>
+                    </div>
+                    <div className="verify-row-meta">
+                      {row.packValue || "-"} • {row.itemName || "-"} • Code: {row.itemCode}
+                    </div>
+                    {row.rowType === "mismatched" ? (
+                      <div className="verify-row-meta">
+                        Entered: {row.enteredFormatted || "-"} • Current: {row.currentStockFormatted || "-"} • Diff:{" "}
+                        {row.diffFormatted || "-"}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </div>
       </IonContent>
+
+      <IonModal
+        isOpen={showProofModal}
+        onDidDismiss={() => {
+          if (!creatingDiff) {
+            setShowProofModal(false);
+            setProofPathInput("");
+            setProofFileName("");
+          }
+        }}
+        className="difference-proof-modal"
+      >
+        <IonContent fullscreen className="difference-proof-content">
+          <div className="stock-sheet-header">
+            <h2>Upload Proof</h2>
+            <IonButton fill="clear" onClick={() => setShowProofModal(false)}>
+              <IonIcon icon={closeOutline} />
+            </IonButton>
+          </div>
+
+          <div className="difference-proof-body">
+            <IonItem lines="none" className="difference-proof-item">
+              <IonLabel position="stacked">Select image file (optional)</IonLabel>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(event) => {
+                  const file = event.target.files?.[0] || null;
+                  setProofFileName(file?.name || "");
+                }}
+              />
+            </IonItem>
+
+            <IonItem lines="none" className="difference-proof-item">
+              <IonLabel position="stacked">Proof path override (optional)</IonLabel>
+              <input
+                type="text"
+                value={proofPathInput}
+                onChange={(event) => setProofPathInput(event.target.value)}
+                placeholder="/image/diff/2026-03-16/diff_12_cycle_5.jpg"
+              />
+            </IonItem>
+
+            <IonText color="medium" className="difference-proof-note">
+              If no path is provided, the system generates one automatically.
+            </IonText>
+
+            <IonButton
+              expand="block"
+              className="difference-proof-submit"
+              disabled={creatingDiff}
+              onClick={() => void submitDiffBatch()}
+            >
+              <IonIcon icon={cloudUploadOutline} slot="start" />
+              {creatingDiff ? "Saving..." : "Save Proof & Create"}
+            </IonButton>
+          </div>
+        </IonContent>
+      </IonModal>
     </IonPage>
   );
 }

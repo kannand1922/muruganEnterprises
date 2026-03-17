@@ -46,6 +46,8 @@ import {
   type BarcodesScannedEvent,
 } from "@capacitor-mlkit/barcode-scanning";
 import { Capacitor } from "@capacitor/core";
+import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
+import { BarcodeFormat as ZXingBarcodeFormat, DecodeHintType } from "@zxing/library";
 import { useHistory } from "react-router-dom";
 import { AppTopBar } from "../components/common/AppTopBar";
 import { getCurrentCycle } from "../api/cyclesApi";
@@ -518,6 +520,10 @@ export function StockEntryPage() {
 
   const cooldownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastScanTimeRef = useRef(0);
+  const webVideoRef = useRef<HTMLVideoElement | null>(null);
+  const webCodeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
+  const webControlsRef = useRef<IScannerControls | null>(null);
+  const webScanningRef = useRef(false);
   const recheckPromptShownRef = useRef<Set<string>>(new Set());
   const dashboardRefreshInFlightRef = useRef(false);
 
@@ -1211,6 +1217,11 @@ export function StockEntryPage() {
   }
 
   async function startScanning() {
+    if (!Capacitor.isNativePlatform()) {
+      await startWebScanning();
+      return;
+    }
+
     const permissionGranted = await checkScannerPermissions();
     if (!permissionGranted) {
       setCameraError("Camera permission is required to scan barcodes.");
@@ -1283,6 +1294,7 @@ export function StockEntryPage() {
   }
 
   async function stopScanning() {
+    stopWebScanning();
     try {
       await BarcodeScanner.stopScan();
     } catch {
@@ -1295,6 +1307,116 @@ export function StockEntryPage() {
     lastScanTimeRef.current = 0;
     setIsScanning(false);
     document.body.classList.remove("barcode-scanner-active");
+  }
+
+  async function startWebScanning() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      const message = "Camera not supported in this browser.";
+      setCameraError(message);
+      presentToast({ message, color: "warning", duration: 1800 });
+      return;
+    }
+
+    try {
+      setCameraError("");
+      const hints = new Map();
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+        ZXingBarcodeFormat.CODE_128,
+        ZXingBarcodeFormat.CODE_39,
+        ZXingBarcodeFormat.CODE_93,
+        ZXingBarcodeFormat.CODABAR,
+        ZXingBarcodeFormat.EAN_13,
+        ZXingBarcodeFormat.EAN_8,
+        ZXingBarcodeFormat.UPC_A,
+        ZXingBarcodeFormat.UPC_E,
+        ZXingBarcodeFormat.ITF,
+        ZXingBarcodeFormat.QR_CODE,
+        ZXingBarcodeFormat.DATA_MATRIX,
+        ZXingBarcodeFormat.AZTEC,
+        ZXingBarcodeFormat.PDF_417,
+        ZXingBarcodeFormat.RSS_14,
+        ZXingBarcodeFormat.RSS_EXPANDED,
+      ]);
+      hints.set(DecodeHintType.TRY_HARDER, true);
+      hints.set(DecodeHintType.ALSO_INVERTED, true);
+
+      webCodeReaderRef.current = new BrowserMultiFormatReader(hints, {
+        delayBetweenScanSuccess: SCAN_EVENT_DEBOUNCE_MS,
+        delayBetweenScanAttempts: 120,
+        tryPlayVideoTimeout: 4000,
+      });
+      webScanningRef.current = true;
+      lastScanTimeRef.current = 0;
+      clearScanTimers();
+      setCanScan(true);
+      setCooldownTimeLeft(0);
+      document.body.classList.add("barcode-scanner-active");
+      setIsScanning(true);
+
+      const deviceId = await resolvePreferredVideoDeviceId();
+      if (!webVideoRef.current) {
+        throw new Error("Camera preview not available");
+      }
+
+      const onZXingResult = (result?: { getText?: () => string; text?: string }) => {
+        if (!webScanningRef.current || !result) return;
+        if (!canScan) return;
+        const now = Date.now();
+        if (now - lastScanTimeRef.current < SCAN_EVENT_DEBOUNCE_MS) return;
+        const text =
+          typeof result.getText === "function" ? result.getText() : result.text || "";
+        if (!text.trim()) return;
+        lastScanTimeRef.current = now;
+        handleDetectedCode(text);
+        startCooldownTimer();
+      };
+
+      try {
+        webControlsRef.current = await webCodeReaderRef.current.decodeFromVideoDevice(
+          deviceId,
+          webVideoRef.current,
+          (result) => onZXingResult(result)
+        );
+      } catch {
+        webControlsRef.current = await webCodeReaderRef.current.decodeFromConstraints(
+          { video: { facingMode: { ideal: "environment" } }, audio: false },
+          webVideoRef.current,
+          (result) => onZXingResult(result)
+        );
+      }
+    } catch (error) {
+      stopWebScanning();
+      const message = error instanceof Error ? error.message : "Error starting camera";
+      setCameraError(message);
+      presentToast({
+        message,
+        color: "danger",
+        duration: 1800,
+      });
+    }
+  }
+
+  async function resolvePreferredVideoDeviceId() {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoInputs = devices.filter((device) => device.kind === "videoinput");
+    if (videoInputs.length === 0) return undefined;
+
+    const preferred = videoInputs.find((device) =>
+      /back|rear|environment/i.test(device.label || "")
+    );
+    return preferred?.deviceId || videoInputs[0]?.deviceId;
+  }
+
+  function stopWebScanning() {
+    webScanningRef.current = false;
+    if (webControlsRef.current) {
+      webControlsRef.current.stop();
+      webControlsRef.current = null;
+    }
+    if (webVideoRef.current) {
+      webVideoRef.current.srcObject = null;
+    }
+    webCodeReaderRef.current = null;
   }
 
   async function closeScannerAndExit() {
@@ -1657,6 +1779,18 @@ export function StockEntryPage() {
     <IonPage>
       {!isScanning ? <AppTopBar title="Stock Entry" showBack={false} showSettings /> : null}
       <IonContent fullscreen className="main-page-content ion-padding stock-entry-content stock-dashboard-content">
+        {isScanning && !Capacitor.isNativePlatform() ? (
+          <div className="web-scanner-layer">
+            <video
+              ref={webVideoRef}
+              className="web-scanner-video"
+              playsInline
+              muted
+              autoPlay
+            />
+            <div className="web-scanner-frame" />
+          </div>
+        ) : null}
         {isScanning ? (
           <div className="scan-close-overlay">
             <IonButton className="scan-close-button" onClick={() => void closeScannerAndExit()}>
@@ -1944,6 +2078,13 @@ export function StockEntryPage() {
                     onClick={() => history.push("/stock/unchecked")}
                   >
                     UNCHECK
+                  </IonButton>
+                  <IonButton
+                    className="operator-diff-nav-btn"
+                    disabled={isMasterBlocked || !activeCycleId || !currentLocationId}
+                    onClick={() => history.push("/stock/difference")}
+                  >
+                    DIFF
                   </IonButton>
                   <IonButton
                     className="operator-fast-nav-btn"

@@ -16,6 +16,7 @@ import {
   phonePortraitOutline,
   printOutline,
   settingsOutline,
+  swapHorizontalOutline,
   starOutline,
 } from "ionicons/icons";
 import { AppTopBar } from "../components/common/AppTopBar";
@@ -62,6 +63,12 @@ const settingItems = [
     subtitle: "Add, edit and delete printers",
     icon: printOutline,
     path: "/settings/printers",
+  },
+  {
+    title: "Difference",
+    subtitle: "Review and manage diff batches",
+    icon: swapHorizontalOutline,
+    path: "/settings/difference",
   },
   {
     title: "Common Configuration",

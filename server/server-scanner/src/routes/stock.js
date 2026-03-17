@@ -2,6 +2,7 @@ const express = require("express");
 const net = require("net");
 const { prisma } = require("../prisma");
 const { loadMasterProducts } = require("../services/masterProducts");
+const { getDiffImageBasePath, getDiffImageFileNameExtension } = require("../services/diffImagePath");
 const { printerServerPort } = require("../../../../shared/config/ports");
 
 const router = express.Router();
@@ -126,6 +127,23 @@ function formatTimeIst(value) {
   });
 }
 
+function getLocalDateKeyIst() {
+  try {
+    const value = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+    return value || new Date().toISOString().slice(0, 10);
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+function buildDiffProofPath({ basePath, dateKey, batchId, cycleLabel, extension }) {
+  const safeBase = String(basePath || "").trim().replace(/\/+$/, "") || "/image/diff";
+  const safeDate = String(dateKey || "").trim() || getLocalDateKeyIst();
+  const safeCycle = String(cycleLabel || "").trim() || "cycle";
+  const safeExt = String(extension || "").trim();
+  return `${safeBase}/${safeDate}/diff_${batchId}_cycle_${safeCycle}${safeExt}`;
+}
+
 function formatDurationMins(startValue, endValue) {
   if (!startValue || !endValue) return "N/A";
   const start = new Date(startValue).getTime();
@@ -171,6 +189,7 @@ function generateVerificationReportHTML(data) {
     nilSummaryRows,
     fastMovingSummary,
     locationSummaries,
+    diffSections = [],
     operatorSummary,
     generatedAt,
   } = data;
@@ -237,6 +256,45 @@ function generateVerificationReportHTML(data) {
     `
     )
     .join("");
+
+  const diffSectionsHtml =
+    diffSections.length === 0 || diffSections.every((section) => section.rows.length === 0)
+      ? `
+      <div style="font-size: 12px; margin: 4px 0;">No diff items</div>
+      <div class="separator"></div>
+    `
+      : diffSections
+          .filter((section) => section.rows.length > 0)
+          .map(
+            (section) => `
+      <div style="font-size: 13px; font-weight: 900; margin: 3px 0; display: flex; justify-content: space-between;">
+        <span>${section.label} (Diff)</span>
+        <span style="font-size: 12px;">${section.rows.length}</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 82%;">Name</th>
+            <th style="width: 18%;">Diff</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${section.rows
+            .map(
+              (item) => `
+            <tr>
+              <td>${item.name}</td>
+              <td>${item.diffLabel}</td>
+            </tr>
+          `
+            )
+            .join("")}
+        </tbody>
+      </table>
+      <div class="separator"></div>
+    `
+          )
+          .join("");
 
   const fastMovingLine = `Fast Moving (${fastMovingSummary.label}): ${fastMovingSummary.scannedProductCount}/${fastMovingSummary.trackedProducts}`;
   const nilStockLine =
@@ -360,6 +418,9 @@ function generateVerificationReportHTML(data) {
 
   ${unmatchedSectionsHtml}
 
+  <div class="center" style="font-weight: 900; margin: 3px 0;">DIFF ITEMS</div>
+  ${diffSectionsHtml}
+
   <div class="center" style="font-size: 11px; margin-top: 3px;">
     Generated: ${generatedAt}
   </div>
@@ -428,6 +489,79 @@ function generateVerificationFilterReportHTML(data) {
   `
     )
     .join("")}
+  <div class="center" style="font-size: 11px; margin-top: 3px;">
+    Generated: ${generatedAt}
+  </div>
+</body>
+</html>
+  `;
+}
+
+function generateDiffListReportHTML(data) {
+  const { dayKey, sections, generatedAt } = data;
+  const sectionsHtml =
+    Array.isArray(sections) && sections.length > 0
+      ? sections
+          .map(
+            (section) => `
+    <div style="font-size: 13px; font-weight: 900; margin: 3px 0; display: flex; justify-content: space-between;">
+      <span>${section.label}</span>
+      <span>${section.rows.length}</span>
+    </div>
+    <table>
+      <thead><tr><th style="width: 82%;">Name</th><th style="width: 18%;">Diff</th></tr></thead>
+      <tbody>
+        ${
+          section.rows.length > 0
+            ? section.rows
+                .map((row) => `<tr><td>${row.name}</td><td>${row.diffLabel}</td></tr>`)
+                .join("")
+            : `<tr><td colspan="2">No items found</td></tr>`
+        }
+      </tbody>
+    </table>
+    <div class="separator"></div>
+  `
+          )
+          .join("")
+      : `<div style="font-size: 12px; margin: 4px 0;">No diff items</div><div class="separator"></div>`;
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>DIFF Report - ${dayKey}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-weight: bold;
+      color: black;
+    }
+    body {
+      font-family: 'Roboto Condensed', sans-serif;
+      font-size: 13px;
+      line-height: 1.1;
+      padding: 6px;
+      max-width: 296px;
+      background: white;
+    }
+    .center { text-align: center; }
+    .separator { border-bottom: 2px solid #000; margin: 3px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 3px 0; table-layout: fixed; }
+    th { padding: 2px 1px; text-align: left; border-bottom: 1px solid #000; font-size: 13px; }
+    td { padding: 1px 1px; text-align: left; border: none; word-wrap: break-word; word-break: break-word; white-space: normal; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <div class="center">
+    <div style="font-weight: 900; font-size: 16px;">DIFF REPORT</div>
+    <div>${dayKey}</div>
+  </div>
+  <div class="separator"></div>
+  ${sectionsHtml}
   <div class="center" style="font-size: 11px; margin-top: 3px;">
     Generated: ${generatedAt}
   </div>
@@ -507,8 +641,18 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
     throw new Error("No active/current cycle found");
   }
 
-  const [locations, shopInfo, workers, phones, bestSellingRows, finishedRows, scanEvents, masterRows, allMasterRows] =
-    await Promise.all([
+  const [
+    locations,
+    shopInfo,
+    workers,
+    phones,
+    bestSellingRows,
+    finishedRows,
+    scanEvents,
+    masterRows,
+    allMasterRows,
+    diffItems,
+  ] = await Promise.all([
     prisma.shopLocation.findMany({ orderBy: [{ sortOrder: "asc" }, { id: "asc" }] }),
     prisma.shopInfo.findUnique({ where: { id: 1 } }),
     prisma.worker.findMany({ orderBy: { name: "asc" } }),
@@ -535,6 +679,27 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
     }),
     loadMasterProducts(),
     loadMasterProducts({ includeAll: true }),
+    prisma.diffItem.findMany({
+      where: {
+        cycleId: cycle.id,
+        deletedAt: null,
+        diffBatch: {
+          is: {
+            deletedAt: null,
+            createdAt: { gte: dayRange.dayStart, lte: dayRange.dayEnd },
+          },
+        },
+      },
+      select: {
+        shopLocationId: true,
+        itemCode: true,
+        itemName: true,
+        brandName: true,
+        packValue: true,
+        diffBottles: true,
+      },
+      orderBy: [{ shopLocationId: "asc" }, { id: "asc" }],
+    }),
   ]);
 
   const workerNameById = new Map(
@@ -720,6 +885,54 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
     });
   }
 
+  const locationById = new Map(locations.map((row) => [row.id, row]));
+  const diffGrouped = new Map();
+
+  diffItems.forEach((item) => {
+    const diffValue = Number(item.diffBottles) || 0;
+    if (diffValue === 0) return;
+    const location = locationById.get(item.shopLocationId) || null;
+    const locationLabel = getLocationLabel(location);
+    const groupKey = String(item.shopLocationId || "0");
+    if (!diffGrouped.has(groupKey)) {
+      diffGrouped.set(groupKey, {
+        locationId: item.shopLocationId,
+        label: locationLabel,
+        rows: [],
+      });
+    }
+
+    const master = masterByCode.get(normalizeItemCode(item.itemCode)) || null;
+    const displayName = buildDisplayName(
+      item.brandName || master?.brandName,
+      item.packValue || master?.packValue,
+      item.itemName || master?.itemName,
+      item.itemCode
+    );
+
+    diffGrouped.get(groupKey).rows.push({
+      name: displayName,
+      diffLabel: toSignedDiffLabel(diffValue),
+      diffValue,
+    });
+  });
+
+  const diffSections = Array.from(diffGrouped.values())
+    .sort((a, b) => {
+      const sortA = locationById.get(a.locationId)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      const sortB = locationById.get(b.locationId)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      if (sortA !== sortB) return sortA - sortB;
+      return String(a.label).localeCompare(String(b.label));
+    })
+    .map((section) => ({
+      ...section,
+      rows: section.rows.sort((a, b) => {
+        const diffSort = Math.abs(Number(b.diffValue) || 0) - Math.abs(Number(a.diffValue) || 0);
+        if (diffSort !== 0) return diffSort;
+        return String(a.name).localeCompare(String(b.name));
+      }),
+    }));
+
   return {
     cycle,
     dayKey: dayRange.dayKey,
@@ -738,6 +951,7 @@ async function buildVerificationDataset({ cycleId, dayRange }) {
       scannedProductCount: fastScanned,
     },
     locationSummaries,
+    diffSections,
     operatorSummary,
     generatedAt: new Date().toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
@@ -849,10 +1063,22 @@ async function printFullCycleVerification({ cycleId, endDate } = {}) {
       `verification_unchecked_${dataset.dayKey}`
     );
 
+    const diffSections = Array.isArray(dataset.diffSections) ? dataset.diffSections : [];
+    const diffHtml = generateDiffListReportHTML({
+      dayKey: dataset.dayKey,
+      sections: diffSections,
+      generatedAt: dataset.generatedAt,
+    });
+    const diffResult = await sendHtmlToPrinter(
+      printerRow,
+      diffHtml,
+      `verification_diff_${dataset.dayKey}`
+    );
+
     return {
       success: true,
       skipped: false,
-      message: "Full-cycle verification report + lists printed.",
+      message: "Full-cycle verification report + lists printed (including diff).",
       cycleId: resolvedCycle.id,
       dayKey: dataset.dayKey,
       printer: {
@@ -866,6 +1092,7 @@ async function printFullCycleVerification({ cycleId, endDate } = {}) {
         matched: matchedResult,
         unmatched: unmatchedResult,
         unchecked: uncheckedResult,
+        diff: diffResult,
       },
     };
   } catch (error) {
@@ -1696,6 +1923,99 @@ function generateFinishReportHTML(data) {
   `;
 }
 
+function generateDiffBatchReportHTML(data) {
+  const {
+    batchId,
+    cycleDate,
+    locationLabel,
+    createdAt,
+    createdByName,
+    proofImagePath,
+    totalItems,
+    totalDiff,
+    sections = [],
+  } = data;
+
+  const sectionsHtml = sections
+    .map((section) => {
+      const rows = Array.isArray(section.rows) ? section.rows : [];
+      return `
+      <div style="font-size: 13px; font-weight: 900; margin: 3px 0; display: flex; justify-content: space-between;">
+        <span>${section.label}</span>
+        <span>${rows.length}</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 82%;">Item</th>
+            <th style="width: 18%;">Diff</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            rows.length > 0
+              ? rows
+                  .map(
+                    (item) => `
+            <tr>
+              <td>${item.name}</td>
+              <td>${item.diffLabel}</td>
+            </tr>
+          `
+                  )
+                  .join("")
+              : `<tr><td colspan="2">No items</td></tr>`
+          }
+        </tbody>
+      </table>
+      <div class="separator"></div>
+    `;
+    })
+    .join("");
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Diff Batch Report - ${batchId}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-weight: bold; color: black; }
+    body { font-family: 'Roboto Condensed', sans-serif; font-size: 13px; line-height: 1.1; padding: 6px; max-width: 296px; background: white; }
+    .center { text-align: center; }
+    .header-line { display: flex; justify-content: space-between; margin: 3px 0; font-size: 13px; }
+    .separator { border-bottom: 2px solid #000; margin: 3px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 3px 0; table-layout: fixed; }
+    th { padding: 2px 1px; text-align: left; border-bottom: 1px solid #000; font-size: 13px; }
+    td { padding: 1px 1px; text-align: left; border: none; word-wrap: break-word; word-break: break-word; white-space: normal; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <div class="center">
+    <div style="font-weight: 900; font-size: 16px;">DIFF BATCH REPORT</div>
+    <div>Batch #${batchId}</div>
+  </div>
+  <div class="separator"></div>
+  <div class="header-line"><span>Cycle</span><span>${cycleDate}</span></div>
+  <div class="header-line"><span>Location</span><span>${locationLabel}</span></div>
+  <div class="header-line"><span>Created</span><span>${createdAt}</span></div>
+  <div class="header-line"><span>By</span><span>${createdByName}</span></div>
+  <div class="header-line"><span>Total Items</span><span>${totalItems}</span></div>
+  <div class="header-line"><span>Total Diff</span><span>${totalDiff}</span></div>
+  ${
+    proofImagePath
+      ? `<div class="header-line"><span>Proof</span><span>${proofImagePath}</span></div>`
+      : ""
+  }
+  <div class="separator"></div>
+  ${sectionsHtml}
+  <div class="center" style="font-size: 11px;">Generated: ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</div>
+</body>
+</html>
+  `;
+}
+
 async function buildFinishReportDataset({
   cycleId,
   operatorId,
@@ -1778,6 +2098,62 @@ async function buildFinishReportDataset({
     generatedAt: new Date().toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
     }),
+    sections,
+  };
+}
+
+async function buildDiffBatchReportDataset(batchId) {
+  const batch = await prisma.diffBatch.findFirst({
+    where: { id: batchId, deletedAt: null },
+    include: {
+      items: { where: { deletedAt: null } },
+      cycle: true,
+      shopLocation: true,
+      createdBy: true,
+    },
+  });
+
+  if (!batch) {
+    throw new Error("Diff batch not found");
+  }
+
+  const locationLabel = getLocationLabel(batch.shopLocation);
+  const cycleDate = getCycleDateLabel(batch.cycle || { id: batch.cycleId, startDate: new Date().toISOString() });
+  const createdAt = new Date(batch.createdAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+  const createdByName = String(batch.createdBy?.name || "Unknown").trim() || "Unknown";
+
+  const totalItems = batch.items.length;
+  const totalDiff = batch.items.reduce((sum, row) => sum + (Number(row.diffBottles) || 0), 0);
+
+  const grouped = new Map();
+  for (const item of batch.items) {
+    const brandLabel = String(item.brandName || "Unknown").trim() || "Unknown";
+    const packLabel = formatPackLabel(item.packValue);
+    const itemLabel = String(item.itemName || item.itemCode || "").trim() || item.itemCode || "-";
+    const name = `${itemLabel}${packLabel ? ` ${packLabel}` : ""}`.trim();
+    const diffLabel = toSignedDiffLabel(item.diffBottles);
+    if (!grouped.has(brandLabel)) {
+      grouped.set(brandLabel, []);
+    }
+    grouped.get(brandLabel).push({ name, diffLabel });
+  }
+
+  const sections = Array.from(grouped.entries())
+    .map(([label, rows]) => ({
+      label,
+      rows: rows.sort((a, b) => String(a.name).localeCompare(String(b.name))),
+    }))
+    .sort((a, b) => String(a.label).localeCompare(String(b.label)));
+
+  return {
+    batchId: batch.id,
+    cycleDate,
+    locationLabel,
+    createdAt,
+    createdByName,
+    proofImagePath: batch.proofImagePath || "",
+    totalItems,
+    totalDiff: toSignedDiffLabel(totalDiff),
     sections,
   };
 }
@@ -2004,10 +2380,6 @@ router.get("/verify/mismatched-finished", async (req, res) => {
   const cycleId = parseOptionalPositiveInt(req.query.cycleId);
   const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
 
-  if (!operatorId) {
-    return res.status(400).json({ success: false, message: "operatorId is required" });
-  }
-
   const cycle =
     cycleId != null
       ? await prisma.cycle.findUnique({ where: { id: cycleId } })
@@ -2029,7 +2401,9 @@ router.get("/verify/mismatched-finished", async (req, res) => {
         cycleId: cycle.id,
         isMatched: false,
         ...(shopLocationId ? { shopLocationId } : {}),
-        OR: [{ lastUpdatedByWorkerId: operatorId }, { finishedByWorkerId: operatorId }],
+        ...(operatorId
+          ? { OR: [{ lastUpdatedByWorkerId: operatorId }, { finishedByWorkerId: operatorId }] }
+          : {}),
       },
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
     }),
@@ -2091,7 +2465,7 @@ router.get("/verify/mismatched-finished", async (req, res) => {
     success: true,
     cycleId: cycle.id,
     cycleStatus: cycle.status,
-    operatorId,
+    operatorId: operatorId || null,
     shopLocationId: shopLocationId || null,
     count: rows.length,
     rows,
@@ -2192,6 +2566,427 @@ router.get("/verify/unchecked-finished", async (req, res) => {
     count: rows.length,
     rows,
   });
+});
+
+router.get("/diff-batches", async (req, res) => {
+  const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
+  const cycleId = parseOptionalPositiveInt(req.query.cycleId);
+  const includeDeleted = ["true", "1", "yes"].includes(
+    String(req.query?.includeDeleted || "").trim().toLowerCase()
+  );
+
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "shopLocationId is required" });
+  }
+
+  const where = {
+    shopLocationId,
+    ...(cycleId ? { cycleId } : {}),
+  };
+
+  const rows = await prisma.diffBatch.findMany({
+    where: {
+      ...where,
+      ...(includeDeleted ? {} : { deletedAt: null }),
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    include: {
+      items: {
+        ...(includeDeleted ? {} : { where: { deletedAt: null } }),
+        orderBy: [{ diffBottles: "desc" }, { itemCode: "asc" }, { id: "asc" }],
+      },
+      cycle: {
+        select: { id: true, sno: true, startDate: true, endDate: true, status: true },
+      },
+      shopLocation: {
+        select: { id: true, locationName: true, locationCode: true, locationColor: true },
+      },
+    },
+  });
+
+  return res.json({ success: true, count: rows.length, rows });
+});
+
+router.post("/diff-batches", async (req, res) => {
+  const cycleId = parseOptionalPositiveInt(req.body?.cycleId);
+  const shopLocationId = parseOptionalPositiveInt(req.body?.shopLocationId);
+  const createdByWorkerId = parseOptionalPositiveInt(req.body?.createdByWorkerId);
+  const sourceScopeRaw = String(req.body?.sourceScope || "").trim().toLowerCase();
+  const proofImagePathInput = String(req.body?.proofImagePath || "").trim();
+  const proofImageName = String(req.body?.proofImageName || "").trim();
+
+  if (!cycleId) {
+    return res.status(400).json({ success: false, message: "cycleId is required" });
+  }
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "shopLocationId is required" });
+  }
+  const requestedScope = sourceScopeRaw || "finished";
+  if (requestedScope !== "unfinished" && requestedScope !== "finished") {
+    return res.status(400).json({ success: false, message: "sourceScope must be unfinished or finished" });
+  }
+  // Diff flow is based on finished rows; force finished scope to match current business logic.
+  const sourceScope = "finished";
+
+  const rawIds = Array.isArray(req.body?.itemIds) ? req.body.itemIds : [];
+  const itemIds = rawIds
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .map((value) => Math.trunc(value));
+
+  if (itemIds.length === 0) {
+    return res.status(400).json({ success: false, message: "itemIds are required" });
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const [cycle, location] = await Promise.all([
+        tx.cycle.findUnique({ where: { id: cycleId } }),
+        tx.shopLocation.findUnique({ where: { id: shopLocationId } }),
+      ]);
+
+      if (!cycle) {
+        throw new Error("Cycle not found");
+      }
+      if (!location) {
+        throw new Error("Shop location not found");
+      }
+
+      const batch = await tx.diffBatch.create({
+        data: {
+          cycleId,
+          shopLocationId,
+          createdByWorkerId: createdByWorkerId || null,
+          proofImageName: proofImageName || null,
+        },
+      });
+
+      const rows = await tx.cycleFinishedStock.findMany({
+        where: {
+          id: { in: itemIds },
+          cycleId,
+          shopLocationId,
+        },
+      });
+
+      const unmatchedRows = rows.filter(
+        (row) => Number(row.diffBottles || 0) !== 0 || !row.isMatched
+      );
+
+      if (unmatchedRows.length === 0) {
+        throw new Error("No unmatched finished rows to move");
+      }
+
+      const diffItemsData = unmatchedRows.map((row) => ({
+        diffBatchId: batch.id,
+        sourceScope,
+        sourceUnfinishedId: row.sourceUnfinishedId || null,
+        sourceFinishedId: row.id,
+        cycleId: row.cycleId,
+        itemCode: row.itemCode,
+        itemName: row.itemName,
+        brandName: row.brandName,
+        packValue: row.packValue,
+        bpc: row.bpc,
+        mrp: row.mrp,
+        barcode: row.barcode,
+        phoneId: row.phoneId,
+        phoneName: row.phoneName,
+        shopLocationId: row.shopLocationId,
+        activityDate: row.activityDate,
+        quantityBottles: row.quantityBottles,
+        currentStockBottles: row.currentStockBottles,
+        diffBottles: row.diffBottles,
+        isMatched: row.isMatched,
+        matchedAt: row.matchedAt || null,
+        lastUpdatedByWorkerId: row.lastUpdatedByWorkerId,
+        finishedAt: row.finishedAt || null,
+        finishedByWorkerId: row.finishedByWorkerId || null,
+      }));
+
+      await tx.diffItem.createMany({ data: diffItemsData });
+
+      const basePath = getDiffImageBasePath();
+      const dateKey = getLocalDateKeyIst();
+      const cycleLabel = cycle.sno || cycle.id;
+      const extension = proofImageName ? getDiffImageFileNameExtension(proofImageName) : "";
+      const generatedPath = buildDiffProofPath({
+        basePath,
+        dateKey,
+        batchId: batch.id,
+        cycleLabel,
+        extension,
+      });
+      const proofImagePath = proofImagePathInput || generatedPath;
+
+      const updatedBatch = await tx.diffBatch.update({
+        where: { id: batch.id },
+        data: {
+          itemCount: unmatchedRows.length,
+          proofImagePath: proofImagePath || null,
+          proofImageName: proofImageName || null,
+        },
+      });
+
+      const movedIds = unmatchedRows.map((row) => row.id);
+      await tx.cycleFinishedStock.deleteMany({ where: { id: { in: movedIds } } });
+
+      return { batch: updatedBatch, movedCount: unmatchedRows.length, movedIds };
+    });
+
+    const previewMode = ["true", "1", "yes"].includes(
+      String(req.body?.preview || "").trim().toLowerCase()
+    );
+    let resolvedPrinterId = parseOptionalPositiveInt(req.body?.printerId);
+    if (!previewMode && !resolvedPrinterId) {
+      const defaultPrinter = await prisma.printer.findFirst({
+        where: { defaultPrinter: true },
+        orderBy: [{ id: "asc" }],
+      });
+      resolvedPrinterId = defaultPrinter?.id || null;
+    }
+
+    const reportDataset = await buildDiffBatchReportDataset(result.batch.id);
+    const reportHtml = generateDiffBatchReportHTML(reportDataset);
+
+    let print = {
+      requested: Boolean(resolvedPrinterId) && !previewMode,
+      attempted: false,
+      success: false,
+      skipped: false,
+      message: "",
+      error: null,
+      printer: null,
+      printResult: null,
+    };
+
+    if (previewMode) {
+      print = {
+        ...print,
+        skipped: true,
+        message: "Preview mode enabled. Print skipped.",
+      };
+    } else if (result.movedCount === 0) {
+      print = {
+        ...print,
+        skipped: true,
+        message: "No rows moved. Print skipped.",
+      };
+    } else if (!resolvedPrinterId) {
+      print = {
+        ...print,
+        skipped: true,
+        message: "No default printer selected. Print skipped.",
+      };
+    } else {
+      const printerRow = await prisma.printer.findUnique({ where: { id: resolvedPrinterId } });
+      if (!printerRow) {
+        print = {
+          ...print,
+          attempted: true,
+          success: false,
+          error: "Printer not found",
+          message: "Printer not found",
+        };
+      } else {
+        try {
+          const printResult = await sendHtmlToPrinter(
+            printerRow,
+            reportHtml,
+            `diff_batch_${result.batch.id}`
+          );
+          print = {
+            ...print,
+            attempted: true,
+            success: true,
+            message: "Diff batch report printed successfully",
+            printer: {
+              id: printerRow.id,
+              name: printerRow.name,
+              ipAddress: printerRow.ipAddress,
+              port: printerRow.port,
+            },
+            printResult,
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to print diff batch report";
+          print = {
+            ...print,
+            attempted: true,
+            success: false,
+            message,
+            error: message,
+            printer: {
+              id: printerRow.id,
+              name: printerRow.name,
+              ipAddress: printerRow.ipAddress,
+              port: printerRow.port,
+            },
+          };
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      movedCount: result.movedCount,
+      movedIds: result.movedIds,
+      batch: result.batch,
+      report: reportDataset,
+      reportHtml,
+      print,
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error instanceof Error ? error.message : "Failed to create diff batch",
+    });
+  }
+});
+
+router.delete("/diff-batches/:id", async (req, res) => {
+  const batchId = parseOptionalPositiveInt(req.params.id);
+  if (!batchId) {
+    return res.status(400).json({ success: false, message: "Invalid batch id" });
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const batch = await tx.diffBatch.findFirst({
+        where: { id: batchId, deletedAt: null },
+        include: { items: { where: { deletedAt: null } } },
+      });
+
+      if (!batch) {
+        throw new Error("Diff batch not found");
+      }
+
+      let restoredUnfinished = 0;
+      let restoredFinished = 0;
+
+      for (const item of batch.items) {
+        const whereKey = {
+          cycleId_itemCode_shopLocationId_activityDate: {
+            cycleId: item.cycleId,
+            itemCode: item.itemCode,
+            shopLocationId: item.shopLocationId,
+            activityDate: item.activityDate,
+          },
+        };
+
+        if (item.sourceScope === "unfinished") {
+          await tx.cycleUnfinishedStock.upsert({
+            where: whereKey,
+            create: {
+              cycleId: item.cycleId,
+              itemCode: item.itemCode,
+              itemName: item.itemName,
+              brandName: item.brandName,
+              packValue: item.packValue,
+              bpc: item.bpc,
+              mrp: item.mrp,
+              barcode: item.barcode,
+              phoneId: item.phoneId,
+              phoneName: item.phoneName,
+              shopLocationId: item.shopLocationId,
+              activityDate: item.activityDate,
+              quantityBottles: item.quantityBottles,
+              currentStockBottles: item.currentStockBottles,
+              diffBottles: item.diffBottles,
+              isMatched: item.isMatched,
+              recheckShown: false,
+              lastUpdatedByWorkerId: item.lastUpdatedByWorkerId,
+              stateUpdatedAt: new Date(),
+            },
+            update: {
+              itemName: item.itemName,
+              brandName: item.brandName,
+              packValue: item.packValue,
+              bpc: item.bpc,
+              mrp: item.mrp,
+              barcode: item.barcode,
+              phoneId: item.phoneId,
+              phoneName: item.phoneName,
+              quantityBottles: item.quantityBottles,
+              currentStockBottles: item.currentStockBottles,
+              diffBottles: item.diffBottles,
+              isMatched: item.isMatched,
+              lastUpdatedByWorkerId: item.lastUpdatedByWorkerId,
+              stateUpdatedAt: new Date(),
+            },
+          });
+          restoredUnfinished += 1;
+        } else {
+          await tx.cycleFinishedStock.upsert({
+            where: whereKey,
+            create: {
+              cycleId: item.cycleId,
+              itemCode: item.itemCode,
+              itemName: item.itemName,
+              brandName: item.brandName,
+              packValue: item.packValue,
+              bpc: item.bpc,
+              mrp: item.mrp,
+              barcode: item.barcode,
+              phoneId: item.phoneId,
+              phoneName: item.phoneName,
+              shopLocationId: item.shopLocationId,
+              activityDate: item.activityDate,
+              quantityBottles: item.quantityBottles,
+              currentStockBottles: item.currentStockBottles,
+              diffBottles: item.diffBottles,
+              isMatched: item.isMatched,
+              matchedAt: item.matchedAt,
+              lastUpdatedByWorkerId: item.lastUpdatedByWorkerId,
+              finishedAt: item.finishedAt || new Date(),
+              finishedByWorkerId: item.finishedByWorkerId,
+              sourceUnfinishedId: item.sourceUnfinishedId,
+            },
+            update: {
+              itemName: item.itemName,
+              brandName: item.brandName,
+              packValue: item.packValue,
+              bpc: item.bpc,
+              mrp: item.mrp,
+              barcode: item.barcode,
+              phoneId: item.phoneId,
+              phoneName: item.phoneName,
+              quantityBottles: item.quantityBottles,
+              currentStockBottles: item.currentStockBottles,
+              diffBottles: item.diffBottles,
+              isMatched: item.isMatched,
+              matchedAt: item.matchedAt,
+              lastUpdatedByWorkerId: item.lastUpdatedByWorkerId,
+              finishedAt: item.finishedAt || new Date(),
+              finishedByWorkerId: item.finishedByWorkerId,
+              sourceUnfinishedId: item.sourceUnfinishedId,
+            },
+          });
+          restoredFinished += 1;
+        }
+      }
+
+      const deletedAt = new Date();
+      await tx.diffItem.updateMany({
+        where: { diffBatchId: batchId, deletedAt: null },
+        data: { deletedAt },
+      });
+      await tx.diffBatch.update({ where: { id: batchId }, data: { deletedAt } });
+
+      return {
+        restoredUnfinished,
+        restoredFinished,
+        restoredCount: batch.items.length,
+      };
+    });
+
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error instanceof Error ? error.message : "Failed to delete diff batch",
+    });
+  }
 });
 
 router.get("/fast-moving-summary", async (req, res) => {
