@@ -62,7 +62,7 @@ export function SettingsBestSellingPage() {
       setSearchResults(list);
     } catch (error) {
       presentToast({
-        message: error instanceof Error ? error.message : "Failed to search master products",
+        message: error instanceof Error ? error.message : "Failed to search products",
         color: "danger",
         duration: 1800,
       });
@@ -118,7 +118,7 @@ export function SettingsBestSellingPage() {
 
         <IonCard className="settings-config-card">
           <IonCardHeader>
-            <IonCardTitle>Add From Master CSV</IonCardTitle>
+            <IonCardTitle>Add Products</IonCardTitle>
           </IonCardHeader>
           <IonCardContent>
             <IonItem>

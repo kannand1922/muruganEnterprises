@@ -46,9 +46,10 @@ import {
   type BarcodesScannedEvent,
 } from "@capacitor-mlkit/barcode-scanning";
 import { Capacitor } from "@capacitor/core";
-import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
-import { BarcodeFormat as ZXingBarcodeFormat, DecodeHintType } from "@zxing/library";
+import { Scanner as WebBarcodeScanner, type IDetectedBarcode } from "@yudiel/react-qr-scanner";
+import { prepareZXingModule, type BarcodeFormat as WebBarcodeFormat } from "barcode-detector";
 import { useHistory } from "react-router-dom";
+import readerWasmUrl from "zxing-wasm/reader/zxing_reader.wasm?url";
 import { AppTopBar } from "../components/common/AppTopBar";
 import { getCurrentCycle } from "../api/cyclesApi";
 import {
@@ -95,6 +96,66 @@ const SCAN_FORMATS = [
 const SCAN_EVENT_DEBOUNCE_MS = 750;
 const SCAN_RETRY_COOLDOWN_SECONDS = 1;
 const DEFAULT_ANDROID_SCAN_ZOOM_RATIO = 1.5;
+const WEB_SCAN_FORMATS: WebBarcodeFormat[] = [
+  "code_128",
+  "code_39",
+  "code_93",
+  "codabar",
+  "ean_13",
+  "ean_8",
+  "upc_a",
+  "upc_e",
+  "itf",
+];
+let webScannerWasmConfigured = false;
+
+function ensureWebScannerWasmConfigured() {
+  if (webScannerWasmConfigured) return;
+  webScannerWasmConfigured = true;
+
+  prepareZXingModule({
+    overrides: {
+      locateFile: (path: string, prefix: string) => {
+        if (path.endsWith(".wasm")) {
+          return readerWasmUrl;
+        }
+        return prefix + path;
+      },
+    },
+  });
+}
+
+ensureWebScannerWasmConfigured();
+
+function getWebCameraErrorMessage(error: unknown) {
+  const domError =
+    typeof DOMException !== "undefined" && error instanceof DOMException ? error : null;
+  const errorName = domError?.name || (error instanceof Error ? error.name : "");
+
+  if (!window.isSecureContext) {
+    return "Camera on phone browser needs HTTPS or localhost. Open the site in a secure URL.";
+  }
+
+  if (errorName === "NotAllowedError" || errorName === "SecurityError") {
+    return "Camera permission is blocked. In Chrome, open Site settings and allow Camera, then reload.";
+  }
+
+  if (errorName === "NotFoundError" || errorName === "DevicesNotFoundError") {
+    return "No camera was found on this device.";
+  }
+
+  if (errorName === "NotReadableError" || errorName === "TrackStartError") {
+    return "Camera is busy in another app or tab. Close other camera apps and try again.";
+  }
+
+  if (errorName === "OverconstrainedError" || errorName === "ConstraintNotSatisfiedError") {
+    return "Back camera could not be started. Try again after reloading the page.";
+  }
+
+  return error instanceof Error && error.message
+    ? error.message
+    : "Unable to start camera on this browser.";
+}
 
 type SearchResult = MasterProduct & {
   matchScore: number;
@@ -276,7 +337,11 @@ function bottlesToPackBottle(totalBottles: number, bpc: number) {
 }
 
 function getTodayDateString() {
-  return new Date().toISOString().slice(0, 10);
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function getActivityDateKey(isoDateTime: string) {
@@ -520,12 +585,9 @@ export function StockEntryPage() {
 
   const cooldownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastScanTimeRef = useRef(0);
-  const webVideoRef = useRef<HTMLVideoElement | null>(null);
-  const webCodeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
-  const webControlsRef = useRef<IScannerControls | null>(null);
-  const webScanningRef = useRef(false);
   const recheckPromptShownRef = useRef<Set<string>>(new Set());
   const dashboardRefreshInFlightRef = useRef(false);
+  const pendingAutoPrefillRef = useRef(false);
 
   const currentLocation =
     locations.find((location) => location.id === currentLocationId) || null;
@@ -1317,106 +1379,67 @@ export function StockEntryPage() {
       return;
     }
 
-    try {
-      setCameraError("");
-      const hints = new Map();
-      hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-        ZXingBarcodeFormat.CODE_128,
-        ZXingBarcodeFormat.CODE_39,
-        ZXingBarcodeFormat.CODE_93,
-        ZXingBarcodeFormat.CODABAR,
-        ZXingBarcodeFormat.EAN_13,
-        ZXingBarcodeFormat.EAN_8,
-        ZXingBarcodeFormat.UPC_A,
-        ZXingBarcodeFormat.UPC_E,
-        ZXingBarcodeFormat.ITF,
-        ZXingBarcodeFormat.QR_CODE,
-        ZXingBarcodeFormat.DATA_MATRIX,
-        ZXingBarcodeFormat.AZTEC,
-        ZXingBarcodeFormat.PDF_417,
-        ZXingBarcodeFormat.RSS_14,
-        ZXingBarcodeFormat.RSS_EXPANDED,
-      ]);
-      hints.set(DecodeHintType.TRY_HARDER, true);
-      hints.set(DecodeHintType.ALSO_INVERTED, true);
+    if (!window.isSecureContext) {
+      const message = getWebCameraErrorMessage(new Error("Insecure context"));
+      setCameraError(message);
+      presentToast({ message, color: "warning", duration: 2600 });
+      return;
+    }
 
-      webCodeReaderRef.current = new BrowserMultiFormatReader(hints, {
-        delayBetweenScanSuccess: SCAN_EVENT_DEBOUNCE_MS,
-        delayBetweenScanAttempts: 120,
-        tryPlayVideoTimeout: 4000,
+    try {
+      const permissionStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: "environment" } },
       });
-      webScanningRef.current = true;
+      permissionStream.getTracks().forEach((track) => track.stop());
+
+      setCameraError("");
       lastScanTimeRef.current = 0;
       clearScanTimers();
       setCanScan(true);
       setCooldownTimeLeft(0);
       document.body.classList.add("barcode-scanner-active");
       setIsScanning(true);
-
-      const deviceId = await resolvePreferredVideoDeviceId();
-      if (!webVideoRef.current) {
-        throw new Error("Camera preview not available");
-      }
-
-      const onZXingResult = (result?: { getText?: () => string; text?: string }) => {
-        if (!webScanningRef.current || !result) return;
-        if (!canScan) return;
-        const now = Date.now();
-        if (now - lastScanTimeRef.current < SCAN_EVENT_DEBOUNCE_MS) return;
-        const text =
-          typeof result.getText === "function" ? result.getText() : result.text || "";
-        if (!text.trim()) return;
-        lastScanTimeRef.current = now;
-        handleDetectedCode(text);
-        startCooldownTimer();
-      };
-
-      try {
-        webControlsRef.current = await webCodeReaderRef.current.decodeFromVideoDevice(
-          deviceId,
-          webVideoRef.current,
-          (result) => onZXingResult(result)
-        );
-      } catch {
-        webControlsRef.current = await webCodeReaderRef.current.decodeFromConstraints(
-          { video: { facingMode: { ideal: "environment" } }, audio: false },
-          webVideoRef.current,
-          (result) => onZXingResult(result)
-        );
-      }
     } catch (error) {
-      stopWebScanning();
-      const message = error instanceof Error ? error.message : "Error starting camera";
+      const message = getWebCameraErrorMessage(error);
       setCameraError(message);
-      presentToast({
-        message,
-        color: "danger",
-        duration: 1800,
-      });
+      presentToast({ message, color: "warning", duration: 2600 });
+      setIsScanning(false);
+      document.body.classList.remove("barcode-scanner-active");
     }
-  }
-
-  async function resolvePreferredVideoDeviceId() {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const videoInputs = devices.filter((device) => device.kind === "videoinput");
-    if (videoInputs.length === 0) return undefined;
-
-    const preferred = videoInputs.find((device) =>
-      /back|rear|environment/i.test(device.label || "")
-    );
-    return preferred?.deviceId || videoInputs[0]?.deviceId;
   }
 
   function stopWebScanning() {
-    webScanningRef.current = false;
-    if (webControlsRef.current) {
-      webControlsRef.current.stop();
-      webControlsRef.current = null;
+    setCameraError("");
+  }
+
+  function handleWebScannerResult(detectedCodes: IDetectedBarcode[]) {
+    if (Capacitor.isNativePlatform() || !isScanning) return;
+    if (!detectedCodes || detectedCodes.length === 0) return;
+    if (!canScan) return;
+
+    const now = Date.now();
+    if (now - lastScanTimeRef.current < SCAN_EVENT_DEBOUNCE_MS) {
+      return;
     }
-    if (webVideoRef.current) {
-      webVideoRef.current.srcObject = null;
-    }
-    webCodeReaderRef.current = null;
+
+    const detected = detectedCodes.find((code) => String(code.rawValue || "").trim()) || null;
+    if (!detected) return;
+
+    lastScanTimeRef.current = now;
+    handleDetectedCode(detected.rawValue);
+    startCooldownTimer();
+  }
+
+  function handleWebScannerError(error: unknown) {
+    const message = getWebCameraErrorMessage(error);
+    setCameraError(message);
+    clearScanTimers();
+    setCanScan(true);
+    setCooldownTimeLeft(0);
+    setIsScanning(false);
+    document.body.classList.remove("barcode-scanner-active");
+    presentToast({ message, color: "warning", duration: 2600 });
   }
 
   async function closeScannerAndExit() {
@@ -1424,40 +1447,89 @@ export function StockEntryPage() {
     history.replace("/dashboard");
   }
 
+  function getPrefillStockRow(product: MasterProduct) {
+    if (!currentLocationId) return null;
+
+    const normalizedCode = normalizeCodeValue(getFieldValue(product.itemCode));
+    if (!normalizedCode) return null;
+
+    const unfinishedMatches = unfinishedRows.filter(
+      (row) =>
+        normalizeCodeValue(getFieldValue(row.itemCode)) === normalizedCode &&
+        row.shopLocationId === currentLocationId
+    );
+    if (unfinishedMatches.length > 0) {
+      const latestUnfinished = unfinishedMatches.reduce((latest, row) => {
+        const latestTime = new Date(
+          latest.stateUpdatedAt || latest.updatedAt || latest.activityDate || latest.createdAt
+        ).getTime();
+        const rowTime = new Date(
+          row.stateUpdatedAt || row.updatedAt || row.activityDate || row.createdAt
+        ).getTime();
+        return rowTime >= latestTime ? row : latest;
+      });
+      return { quantityBottles: latestUnfinished.quantityBottles, source: "unfinished" as const };
+    }
+
+    const finishedMatches = finishedRows.filter(
+      (row) =>
+        normalizeCodeValue(getFieldValue(row.itemCode)) === normalizedCode &&
+        row.shopLocationId === currentLocationId
+    );
+    if (finishedMatches.length === 0) {
+      return null;
+    }
+
+    const latestFinished = finishedMatches.reduce((latest, row) => {
+      const latestTime = new Date(
+        latest.updatedAt || latest.finishedAt || latest.activityDate || latest.createdAt
+      ).getTime();
+      const rowTime = new Date(
+        row.updatedAt || row.finishedAt || row.activityDate || row.createdAt
+      ).getTime();
+      return rowTime >= latestTime ? row : latest;
+    });
+
+    return { quantityBottles: latestFinished.quantityBottles, source: "finished" as const };
+  }
+
+  function applyProductPrefill(product: MasterProduct) {
+    const safeBpc = Number(product.bpc) || 12;
+    const existing = getPrefillStockRow(product);
+    if (existing) {
+      const starting = bottlesToPackBottle(existing.quantityBottles, safeBpc);
+      setPackQty(starting.packs ? String(starting.packs) : "");
+      setBottleQty(starting.bottles ? String(starting.bottles) : "");
+      pendingAutoPrefillRef.current = false;
+      return true;
+    }
+    setPackQty("");
+    setBottleQty("");
+    pendingAutoPrefillRef.current = true;
+    return false;
+  }
+
   function openProductEditor(product: MasterProduct, source: "scan" | "manual" = "manual") {
     if (isMasterBlocked) {
       presentToast({
-        message: "Master CSV is stale. Update brands.csv to continue.",
+        message: "Product data is outdated. Update brands.csv to continue.",
         color: "warning",
         duration: 1800,
       });
       return;
     }
 
-    const safeBpc = Number(product.bpc) || 12;
-    if (source === "scan") {
-      const existing = unfinishedRows.find(
-        (row) =>
-          row.itemCode === product.itemCode &&
-          row.shopLocationId === currentLocationId &&
-          getActivityDateKey(row.activityDate) === todayKey
-      );
-      // Prefill only for camera scans, and only from unfinished table.
-      if (existing) {
-        const starting = bottlesToPackBottle(existing.quantityBottles, safeBpc);
-        setPackQty(starting.packs ? String(starting.packs) : "");
-        setBottleQty(starting.bottles ? String(starting.bottles) : "");
-      } else {
-        setPackQty("");
-        setBottleQty("");
-      }
-    } else {
-      setPackQty("");
-      setBottleQty("");
-    }
+    applyProductPrefill(product);
     setSelectedProduct(product);
     setShowStockModal(true);
   }
+
+  useEffect(() => {
+    if (!showStockModal || !selectedProduct || !pendingAutoPrefillRef.current) {
+      return;
+    }
+    applyProductPrefill(selectedProduct);
+  }, [showStockModal, selectedProduct, unfinishedRows, finishedRows, currentLocationId]);
 
   function handleDetectedCode(rawValue: string) {
     const normalized = rawValue.trim().toLowerCase();
@@ -1617,7 +1689,7 @@ export function StockEntryPage() {
   function handleModeChange(nextMode: EntryMode) {
     if (isMasterBlocked) {
       presentToast({
-        message: "Master CSV is stale. Update brands.csv to continue.",
+        message: "Product data is outdated. Update brands.csv to continue.",
         color: "warning",
         duration: 1800,
       });
@@ -1639,22 +1711,26 @@ export function StockEntryPage() {
   }
 
   function incrementCases() {
+    pendingAutoPrefillRef.current = false;
     const next = (Number.parseInt(packQty || "0", 10) || 0) + 1;
     setPackQty(String(next));
   }
 
   function decrementCases() {
+    pendingAutoPrefillRef.current = false;
     const current = Number.parseInt(packQty || "0", 10) || 0;
     const next = Math.max(0, current - 1);
     setPackQty(next > 0 ? String(next) : "");
   }
 
   function incrementBottles() {
+    pendingAutoPrefillRef.current = false;
     const next = (Number.parseInt(bottleQty || "0", 10) || 0) + 1;
     setBottleQty(String(next));
   }
 
   function decrementBottles() {
+    pendingAutoPrefillRef.current = false;
     const current = Number.parseInt(bottleQty || "0", 10) || 0;
     const next = Math.max(0, current - 1);
     setBottleQty(next > 0 ? String(next) : "");
@@ -1663,7 +1739,7 @@ export function StockEntryPage() {
   async function saveStock() {
     if (isMasterBlocked) {
       presentToast({
-        message: "Master CSV is stale. Update brands.csv to continue.",
+        message: "Product data is outdated. Update brands.csv to continue.",
         color: "warning",
         duration: 1800,
       });
@@ -1781,14 +1857,20 @@ export function StockEntryPage() {
       <IonContent fullscreen className="main-page-content ion-padding stock-entry-content stock-dashboard-content">
         {isScanning && !Capacitor.isNativePlatform() ? (
           <div className="web-scanner-layer">
-            <video
-              ref={webVideoRef}
-              className="web-scanner-video"
-              playsInline
-              muted
-              autoPlay
-            />
-            <div className="web-scanner-frame" />
+            <WebBarcodeScanner
+              onScan={handleWebScannerResult}
+              onError={handleWebScannerError}
+              formats={WEB_SCAN_FORMATS}
+              allowMultiple={true}
+              scanDelay={250}
+              sound={false}
+              constraints={{ facingMode: { ideal: "environment" } }}
+              components={{ finder: false, onOff: false, torch: false, zoom: false }}
+              styles={{ container: { width: "100%", height: "100%" }, video: { objectFit: "cover" } }}
+              classNames={{ container: "web-scanner-container", video: "web-scanner-video" }}
+            >
+              <div className="web-scanner-frame" />
+            </WebBarcodeScanner>
           </div>
         ) : null}
         {isScanning ? (
@@ -1813,7 +1895,7 @@ export function StockEntryPage() {
                 <div className="dashboard-block master-status-block is-blocked">
                   <h3>Access Blocked</h3>
                   {masterStatusCheckFailed ? (
-                    <p>Unable to verify master CSV status. Please check backend and try again.</p>
+                    <p>Unable to verify product data status. Please check backend and try again.</p>
                   ) : (
                     <>
                       <p>
@@ -1952,7 +2034,7 @@ export function StockEntryPage() {
                 </div>
                 <div className="stock-loading-wrap">
                   <IonSpinner name="crescent" />
-                  <IonText>Loading master products...</IonText>
+                  <IonText>Loading products...</IonText>
                 </div>
               </div>
             ) : null}
@@ -2070,7 +2152,7 @@ export function StockEntryPage() {
                       history.push(`/stock/verify?operatorId=${encodeURIComponent(String(selectedOperatorId))}`);
                     }}
                   >
-                    VERIFY
+                    UNMATCH
                   </IonButton>
                   <IonButton
                     className="operator-unchecked-nav-btn"
@@ -2361,7 +2443,10 @@ export function StockEntryPage() {
                 placeholder="0"
                 inputMode="numeric"
                 pattern="[0-9]*"
-                onIonInput={(event) => setPackQty(String(event.detail.value || "").replace(/\D/g, ""))}
+                onIonInput={(event) => {
+                  pendingAutoPrefillRef.current = false;
+                  setPackQty(String(event.detail.value || "").replace(/\D/g, ""));
+                }}
               />
               <button type="button" onClick={incrementCases} className="stock-step-btn">
                 <IonIcon icon={addOutline} />
@@ -2385,7 +2470,10 @@ export function StockEntryPage() {
                 placeholder="0"
                 inputMode="numeric"
                 pattern="[0-9]*"
-                onIonInput={(event) => setBottleQty(String(event.detail.value || "").replace(/\D/g, ""))}
+                onIonInput={(event) => {
+                  pendingAutoPrefillRef.current = false;
+                  setBottleQty(String(event.detail.value || "").replace(/\D/g, ""));
+                }}
               />
               <button type="button" onClick={incrementBottles} className="stock-step-btn">
                 <IonIcon icon={addOutline} />

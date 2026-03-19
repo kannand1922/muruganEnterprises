@@ -4,6 +4,7 @@ import {
   IonCheckbox,
   IonContent,
   IonIcon,
+  IonInput,
   IonItem,
   IonLabel,
   IonModal,
@@ -15,19 +16,36 @@ import {
   IonText,
   useIonToast,
 } from "@ionic/react";
-import { cloudUploadOutline, closeOutline, printOutline } from "ionicons/icons";
+import {
+  addOutline,
+  cloudUploadOutline,
+  closeOutline,
+  cubeOutline,
+  printOutline,
+  removeOutline,
+  wineOutline,
+} from "ionicons/icons";
 import { useEffect, useMemo, useState } from "react";
 import { getCurrentCycle } from "../api/cyclesApi";
-import { getPrinters } from "../api/metaApi";
+import {
+  getAllMasterProducts,
+  getPrinters,
+  getShopLocations,
+  type MasterProduct,
+  type ShopLocation,
+} from "../api/metaApi";
 import {
   createDiffBatch,
+  finishUnfinishedStock,
   getVerifyUncheckedFinished,
   getVerifyMismatchedFinished,
   printVerificationList,
+  upsertUnfinishedStock,
   type VerifyMismatchedFinishedRow,
   type VerifyUncheckedFinishedRow,
 } from "../api/stockApi";
 import { getCurrentLocationIdFromStorage } from "../config/location";
+import { getCurrentPhoneIdFromStorage } from "../config/phone";
 import { AppTopBar } from "../components/common/AppTopBar";
 
 const CURRENT_OPERATOR_ID_KEY = "stocklens_current_operator_id";
@@ -37,6 +55,7 @@ type RowFilter = "all" | "unchecked" | "mismatched";
 
 type CombinedVerifyRow = {
   rowType: "unchecked" | "mismatched";
+  cycleId: number;
   itemCode: string;
   itemName: string;
   brandName: string;
@@ -47,6 +66,10 @@ type CombinedVerifyRow = {
   mrp?: number | null;
   barcode?: string | null;
   id?: number;
+  activityDate?: string;
+  enteredBottles?: number;
+  currentStockBottles?: number;
+  diffBottles?: number;
   enteredFormatted?: string;
   currentStockFormatted?: string;
   diffFormatted?: string;
@@ -58,9 +81,78 @@ function parsePositiveInt(rawValue: string | null) {
   return Math.trunc(parsed);
 }
 
+function getFieldValue(value: string | number | null | undefined) {
+  if (value === undefined || value === null) return "";
+  return String(value).trim();
+}
+
+function normalizeLocationKey(value: string | null | undefined) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeCodeValue(value: string) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function parseStockStringToBottles(stock: string | null | undefined, bpc: number) {
+  const raw = String(stock || "").trim();
+  if (!raw) return 0;
+  const negative = raw.startsWith("-");
+  const unsigned = negative ? raw.slice(1) : raw;
+  const [packsPart = "0", bottlesPart = "0"] = unsigned.split(".");
+  const packs = Math.max(0, Number.parseInt(packsPart, 10) || 0);
+  const bottles = Math.max(0, Number.parseInt(bottlesPart, 10) || 0);
+  const total = packs * bpc + bottles;
+  return negative ? -total : total;
+}
+
+function bottlesToPackBottle(totalBottles: number, bpc: number) {
+  const safeBpc = Math.max(1, bpc || 1);
+  const packs = Math.floor(Math.max(0, totalBottles) / safeBpc);
+  const bottles = Math.max(0, totalBottles) % safeBpc;
+  return { packs, bottles };
+}
+
+function formatBottleCount(totalBottles: number, bpc: number) {
+  const safeBpc = Math.max(1, bpc || 1);
+  const negative = totalBottles < 0;
+  const absolute = bottlesToPackBottle(Math.abs(totalBottles), safeBpc);
+  const formatted = `${absolute.packs}.${String(absolute.bottles).padStart(2, "0")}`;
+  return negative ? `-${formatted}` : formatted;
+}
+
+function getTodayDateString() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getActivityDateKey(isoDateTime: string) {
+  return String(isoDateTime || "").slice(0, 10);
+}
+
+function getMasterStockBottles(product: MasterProduct, location: ShopLocation | null) {
+  const safeBpc = Number(product.bpc) || 12;
+  const locationCodeKey = normalizeLocationKey(location?.locationCode);
+  const locationNameKey = normalizeLocationKey(location?.locationName);
+  const locationTypeKey = normalizeLocationKey(location?.locationType || "");
+  const locationStocks = product.locationStocks || {};
+  const source =
+    (locationCodeKey && locationStocks[locationCodeKey]) ||
+    (locationNameKey && locationStocks[locationNameKey]) ||
+    (locationTypeKey && locationStocks[locationTypeKey]) ||
+    product.shopStock;
+  return parseStockStringToBottles(source, safeBpc);
+}
+
 function mapUncheckedRow(row: VerifyUncheckedFinishedRow): CombinedVerifyRow {
   return {
     rowType: "unchecked",
+    cycleId: row.cycleId,
     itemCode: row.itemCode,
     itemName: row.itemName,
     brandName: row.brandName,
@@ -76,6 +168,7 @@ function mapUncheckedRow(row: VerifyUncheckedFinishedRow): CombinedVerifyRow {
 function mapMismatchedRow(row: VerifyMismatchedFinishedRow): CombinedVerifyRow {
   return {
     rowType: "mismatched",
+    cycleId: row.cycleId,
     itemCode: row.itemCode,
     itemName: row.itemName,
     brandName: row.brandName,
@@ -85,6 +178,10 @@ function mapMismatchedRow(row: VerifyMismatchedFinishedRow): CombinedVerifyRow {
     bpc: row.bpc,
     mrp: row.mrp,
     id: row.id,
+    activityDate: row.activityDate,
+    enteredBottles: row.enteredBottles,
+    currentStockBottles: row.currentStockBottles,
+    diffBottles: row.diffBottles,
     enteredFormatted: row.enteredFormatted,
     currentStockFormatted: row.currentStockFormatted,
     diffFormatted: row.diffFormatted,
@@ -105,7 +202,14 @@ export function UncheckedPage() {
   const [printing, setPrinting] = useState(false);
   const [activeCycleId, setActiveCycleId] = useState<number | null>(null);
   const [currentLocationId, setCurrentLocationId] = useState<number | null>(null);
+  const [masterRows, setMasterRows] = useState<MasterProduct[]>([]);
+  const [locations, setLocations] = useState<ShopLocation[]>([]);
   const [selectedMismatchIds, setSelectedMismatchIds] = useState<Set<number>>(new Set());
+  const [selectedRow, setSelectedRow] = useState<CombinedVerifyRow | null>(null);
+  const [showStockModal, setShowStockModal] = useState(false);
+  const [packQty, setPackQty] = useState("");
+  const [bottleQty, setBottleQty] = useState("");
+  const [saving, setSaving] = useState(false);
   const [showProofModal, setShowProofModal] = useState(false);
   const [proofPathInput, setProofPathInput] = useState("");
   const [proofFileName, setProofFileName] = useState("");
@@ -167,7 +271,7 @@ export function UncheckedPage() {
       }
       setActiveCycleId(cycleResult.cycle.id);
 
-      const [uncheckedResult, mismatchedResult] = await Promise.all([
+      const [uncheckedResult, mismatchedResult, masterProductRows, locationRows] = await Promise.all([
         getVerifyUncheckedFinished({
           cycleId: cycleResult.cycle.id,
           shopLocationId: currentLocationId,
@@ -176,8 +280,12 @@ export function UncheckedPage() {
           cycleId: cycleResult.cycle.id,
           shopLocationId: currentLocationId,
         }),
+        getAllMasterProducts(10000),
+        getShopLocations(),
       ]);
 
+      setMasterRows(masterProductRows);
+      setLocations(locationRows);
       setRows([
         ...(uncheckedResult.rows || []).map(mapUncheckedRow),
         ...(mismatchedResult.rows || []).map(mapMismatchedRow),
@@ -329,11 +437,9 @@ export function UncheckedPage() {
     }
   }
 
-  const mismatchedRows = useMemo(
-    () => filteredRows.filter((row) => row.rowType === "mismatched" && row.id),
-    [filteredRows]
-  );
-  const selectedMismatchCount = selectedMismatchIds.size;
+  const todayKey = getTodayDateString();
+  const currentLocation =
+    locations.find((location) => location.id === currentLocationId) || null;
 
   function toggleMismatchSelection(row: CombinedVerifyRow) {
     if (row.rowType !== "mismatched" || !row.id) return;
@@ -345,7 +451,161 @@ export function UncheckedPage() {
         next.add(row.id!);
       }
       return next;
-    });
+      });
+  }
+
+  function getCurrentStockForRow(row: CombinedVerifyRow) {
+    if (typeof row.currentStockBottles === "number") {
+      return row.currentStockBottles;
+    }
+    const normalizedCode = normalizeCodeValue(row.itemCode);
+    const master = masterRows.find(
+      (masterRow) => normalizeCodeValue(getFieldValue(masterRow.itemCode)) === normalizedCode
+    );
+    if (!master) return 0;
+    return getMasterStockBottles(master, currentLocation);
+  }
+
+  function openRowEditor(row: CombinedVerifyRow) {
+    const safeBpc = Number(row.bpc) || 12;
+    if (row.rowType === "mismatched") {
+      const starting = bottlesToPackBottle(Number(row.enteredBottles || 0), safeBpc);
+      setPackQty(starting.packs ? String(starting.packs) : "");
+      setBottleQty(starting.bottles ? String(starting.bottles) : "");
+    } else {
+      setPackQty("");
+      setBottleQty("");
+    }
+    setSelectedRow(row);
+    setShowStockModal(true);
+  }
+
+  function incrementCases() {
+    const next = (Number.parseInt(packQty || "0", 10) || 0) + 1;
+    setPackQty(String(next));
+  }
+
+  function decrementCases() {
+    const current = Number.parseInt(packQty || "0", 10) || 0;
+    const next = Math.max(0, current - 1);
+    setPackQty(next > 0 ? String(next) : "");
+  }
+
+  function incrementBottles() {
+    const next = (Number.parseInt(bottleQty || "0", 10) || 0) + 1;
+    setBottleQty(String(next));
+  }
+
+  function decrementBottles() {
+    const current = Number.parseInt(bottleQty || "0", 10) || 0;
+    const next = Math.max(0, current - 1);
+    setBottleQty(next > 0 ? String(next) : "");
+  }
+
+  const selectedProductBpc = Number(selectedRow?.bpc) || 12;
+  const enteredCases = Number.parseInt(packQty || "0", 10) || 0;
+  const enteredBottles = Number.parseInt(bottleQty || "0", 10) || 0;
+  const enteredTotalBottles = enteredCases * selectedProductBpc + enteredBottles;
+  const selectedCurrentStockBottles = selectedRow ? getCurrentStockForRow(selectedRow) : 0;
+  const selectedCurrentStockFormatted = formatBottleCount(
+    selectedCurrentStockBottles,
+    selectedProductBpc
+  );
+  const selectedPreviousFormatted =
+    selectedRow?.rowType === "mismatched" ? selectedRow.enteredFormatted || "0.00" : "-";
+  const selectedStatusLabel =
+    selectedRow?.rowType === "mismatched"
+      ? selectedRow.diffFormatted || "0.00"
+      : "Unchecked";
+  const stockValueDisplay = `${enteredCases}.${String(enteredBottles).padStart(2, "0")}`;
+  const currentDiffBottles = enteredTotalBottles - selectedCurrentStockBottles;
+
+  async function saveStockEntry() {
+    if (!selectedRow) return;
+
+    const operatorId = parsePositiveInt(localStorage.getItem(CURRENT_OPERATOR_ID_KEY));
+    if (!operatorId) {
+      presentToast({
+        message: "Select operator first in stock entry page.",
+        color: "warning",
+        duration: 1600,
+      });
+      return;
+    }
+
+    const currentPhoneId = getCurrentPhoneIdFromStorage();
+    if (!currentPhoneId) {
+      presentToast({
+        message: "Select current phone in Settings -> Phones",
+        color: "warning",
+        duration: 1800,
+      });
+      return;
+    }
+
+    const cycleId = selectedRow.cycleId || activeCycleId;
+    if (!cycleId) {
+      presentToast({
+        message: "No active cycle. Start a cycle first.",
+        color: "warning",
+        duration: 1800,
+      });
+      return;
+    }
+
+    const activityDate =
+      selectedRow.rowType === "mismatched" && selectedRow.activityDate
+        ? getActivityDateKey(selectedRow.activityDate)
+        : todayKey;
+
+    setSaving(true);
+    try {
+      await upsertUnfinishedStock({
+        cycleId,
+        itemCode: selectedRow.itemCode,
+        itemName: selectedRow.itemName,
+        brandName: selectedRow.brandName || selectedRow.itemCode,
+        packValue: selectedRow.packValue,
+        bpc: selectedRow.bpc ?? null,
+        mrp: selectedRow.mrp ?? null,
+        barcode: selectedRow.barcode || undefined,
+        shopLocationId: selectedRow.shopLocationId,
+        activityDate,
+        quantityBottles: enteredTotalBottles,
+        currentStockBottles: selectedCurrentStockBottles,
+        phoneId: currentPhoneId,
+        lastUpdatedByWorkerId: operatorId,
+        recheckShown: false,
+      });
+
+      await finishUnfinishedStock({
+        cycleId,
+        itemCode: selectedRow.itemCode,
+        shopLocationId: selectedRow.shopLocationId,
+        activityDate,
+        finishedByWorkerId: operatorId,
+      });
+
+      await loadUncheckedRows();
+      setShowStockModal(false);
+      setSelectedRow(null);
+      presentToast({
+        message:
+          enteredTotalBottles === selectedCurrentStockBottles
+            ? "Stock updated. Item cleared from unchecked list."
+            : "Stock updated. Item is now mismatched.",
+        color: enteredTotalBottles === selectedCurrentStockBottles ? "success" : "warning",
+        duration: 1800,
+      });
+    } catch (error) {
+      presentToast({
+        message: error instanceof Error ? error.message : "Failed to save stock",
+        color: "danger",
+        duration: 1800,
+      });
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleCreateDiff() {
@@ -404,6 +664,12 @@ export function UncheckedPage() {
     <IonPage>
       <AppTopBar
         title="Unchecked Products"
+        endContent={
+          <>
+            <span className="toolbar-title-tag unchecked">({uncheckedCount})</span>
+            <span className="toolbar-title-tag mismatched">({mismatchedCount})</span>
+          </>
+        }
         showBack
         backPath="/stock"
         showSettings={false}
@@ -497,23 +763,11 @@ export function UncheckedPage() {
             {printing ? "Printing..." : "Print Unchecked"}
           </IonButton>
 
-          {mismatchedRows.length > 0 ? (
-            <div className="verify-diff-summary">
-              <IonBadge color="warning">Mismatched: {mismatchedRows.length}</IonBadge>
-              <IonBadge color="medium">Selected: {selectedMismatchCount}</IonBadge>
+          {locationName ? (
+            <div className="verify-subtitle">
+              Location: {locationName} • Tap a product to enter stock
             </div>
           ) : null}
-
-          <IonButton
-            expand="block"
-            className="difference-create-btn"
-            disabled={loading || creatingDiff || selectedMismatchCount === 0}
-            onClick={() => void handleCreateDiff()}
-          >
-            {creatingDiff ? "Creating..." : "Create Diff"}
-          </IonButton>
-
-          {locationName ? <div className="verify-subtitle">Location: {locationName}</div> : null}
 
           {loading ? (
             <div className="stock-loading-wrap">
@@ -532,22 +786,26 @@ export function UncheckedPage() {
               {filteredRows.map((row) => (
                 <div
                   key={`${row.rowType}_${row.shopLocationId}_${row.itemCode}_${row.packValue}_${row.id || "base"}`}
-                  className={`verify-row ${row.rowType === "mismatched" ? "is-selectable" : ""}`}
+                  className="verify-row is-selectable"
+                  onClick={() => openRowEditor(row)}
                 >
                   {row.rowType === "mismatched" ? (
                     <IonCheckbox
                       className="verify-row-checkbox"
                       checked={row.id ? selectedMismatchIds.has(row.id) : false}
+                      onClick={(event) => event.stopPropagation()}
                       onIonChange={() => toggleMismatchSelection(row)}
                     />
                   ) : null}
-                  <div className="verify-row-body">
-                    <div className="verify-row-title">
-                      {row.brandName || row.itemName}
-                      <IonBadge color={row.rowType === "unchecked" ? "medium" : "warning"} style={{ marginLeft: 8 }}>
-                        {row.rowType === "unchecked" ? "Unchecked" : "Mismatched"}
-                      </IonBadge>
-                    </div>
+                    <div className="verify-row-body">
+                      <div className="verify-row-title">
+                        {row.brandName || row.itemName}
+                        {row.rowType === "mismatched" ? (
+                          <IonBadge color="warning" style={{ marginLeft: 8 }}>
+                            Mismatched
+                          </IonBadge>
+                        ) : null}
+                      </div>
                     <div className="verify-row-meta">
                       {row.packValue || "-"} • {row.itemName || "-"} • Code: {row.itemCode}
                     </div>
@@ -564,6 +822,135 @@ export function UncheckedPage() {
           )}
         </div>
       </IonContent>
+
+      <IonModal
+        isOpen={showStockModal}
+        onDidDismiss={() => {
+          setShowStockModal(false);
+          setSelectedRow(null);
+        }}
+        className="stock-editor-modal"
+        breakpoints={[0, 0.96]}
+        initialBreakpoint={0.96}
+        handle={true}
+      >
+        <IonContent fullscreen className="stock-editor-modal-content">
+          <div className="stock-sheet-header">
+            <h2>Enter Stock Quantity</h2>
+            <IonButton
+              fill="clear"
+              onClick={() => {
+                setShowStockModal(false);
+                setSelectedRow(null);
+              }}
+            >
+              <IonIcon icon={closeOutline} />
+            </IonButton>
+          </div>
+
+          <div className="stock-sheet-product">
+            <div>
+              <h3>{selectedRow?.brandName || "-"}</h3>
+              <div className="stock-sheet-pack-line">
+                <strong>{String(selectedRow?.packValue || "-")}ml</strong>
+              </div>
+              <p className="stock-sheet-code">Code: {selectedRow?.itemCode || "-"}</p>
+            </div>
+            <IonButton
+              className="stock-save-top-btn"
+              color="success"
+              onClick={() => void saveStockEntry()}
+              disabled={saving || !selectedRow}
+            >
+              {saving ? "Saving..." : "Save"}
+            </IonButton>
+          </div>
+
+          <div className="stock-step-card stock-step-card-cases">
+            <div className="stock-step-title">
+              <IonIcon icon={cubeOutline} />
+              Cases
+            </div>
+            <div className="stock-stepper">
+              <button type="button" onClick={decrementCases} className="stock-step-btn">
+                <IonIcon icon={removeOutline} />
+              </button>
+              <IonInput
+                className="stock-step-input"
+                type="text"
+                value={packQty}
+                placeholder="0"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                onIonInput={(event) => setPackQty(String(event.detail.value || "").replace(/\D/g, ""))}
+              />
+              <button type="button" onClick={incrementCases} className="stock-step-btn">
+                <IonIcon icon={addOutline} />
+              </button>
+            </div>
+          </div>
+
+          <div className="stock-step-card stock-step-card-bottles">
+            <div className="stock-step-title">
+              <IonIcon icon={wineOutline} />
+              Bottle
+            </div>
+            <div className="stock-stepper">
+              <button type="button" onClick={decrementBottles} className="stock-step-btn">
+                <IonIcon icon={removeOutline} />
+              </button>
+              <IonInput
+                className="stock-step-input"
+                type="text"
+                value={bottleQty}
+                placeholder="0"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                onIonInput={(event) =>
+                  setBottleQty(String(event.detail.value || "").replace(/\D/g, ""))
+                }
+              />
+              <button type="button" onClick={incrementBottles} className="stock-step-btn">
+                <IonIcon icon={addOutline} />
+              </button>
+            </div>
+          </div>
+
+          <div className="stock-summary-card stock-summary-card-total">
+            <h4>New Stock Summary</h4>
+            <div className="stock-summary-grid">
+              <div>
+                <span>CASES</span>
+                <strong>{enteredCases}</strong>
+              </div>
+              <div>
+                <span>BOTTLES</span>
+                <strong>{enteredBottles}</strong>
+              </div>
+              <div>
+                <span>TOTAL</span>
+                <strong>{enteredTotalBottles}</strong>
+              </div>
+            </div>
+            <div className="stock-value-box">
+              <span>Stock Value</span>
+              <strong>{stockValueDisplay}</strong>
+            </div>
+          </div>
+
+          <IonButton
+            expand="block"
+            fill="outline"
+            className="stock-cancel-btn"
+            onClick={() => {
+              setShowStockModal(false);
+              setSelectedRow(null);
+            }}
+          >
+            Cancel
+          </IonButton>
+        </IonContent>
+      </IonModal>
 
       <IonModal
         isOpen={showProofModal}

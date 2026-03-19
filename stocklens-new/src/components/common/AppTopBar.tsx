@@ -7,7 +7,7 @@ import {
   IonToolbar,
 } from "@ionic/react";
 import { arrowBackOutline, settingsOutline, swapHorizontalOutline } from "ionicons/icons";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { useHistory, useLocation } from "react-router-dom";
 import { getShopLocations, type ShopLocation } from "../../api/metaApi";
 import { getApiBaseUrl } from "../../config/env";
@@ -20,7 +20,8 @@ import {
 import { hasSettingsAccess } from "../../config/settingsAuth";
 
 type AppTopBarProps = {
-  title: string;
+  title: ReactNode;
+  endContent?: ReactNode;
   showSettings?: boolean;
   showBack?: boolean;
   backPath?: string;
@@ -32,6 +33,7 @@ type AppTopBarProps = {
 
 export function AppTopBar({
   title,
+  endContent,
   showSettings = false,
   showBack = true,
   backPath = "/dashboard",
@@ -223,12 +225,16 @@ export function AppTopBar({
               {currentLocation ? currentLocation.locationName : "No Location"}
             </button>
           ) : (
-            title
+            <div className="toolbar-title-content">{title}</div>
           )}
         </IonTitle>
+        {endContent ? (
+          <div slot="end" className="topbar-end-content">
+            {endContent}
+          </div>
+        ) : null}
         {shouldRenderBadge ? (
           <div slot="end" className="connection-badge-holder topbar-connection-holder">
-            {/* <span className="scan-count-text">{statusBadgeText}</span> */}
             <span className={`status-dot ${statusDotClass}`} />
           </div>
         ) : null}

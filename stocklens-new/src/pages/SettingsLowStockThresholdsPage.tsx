@@ -239,7 +239,7 @@ export function SettingsLowStockThresholdsPage() {
             </div>
           </IonCardHeader>
           <IonCardContent>
-            <IonNote>These rules are generated from pack sizes found in the master CSV.</IonNote>
+            <IonNote>These rules are generated from pack sizes found in brands.csv.</IonNote>
             <div className="low-stock-pack-rules">
               <div className="low-stock-pack-header">
                 <span>Pack Size</span>

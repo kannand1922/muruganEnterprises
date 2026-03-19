@@ -301,7 +301,7 @@ export function SettingsNotificationConfigPage() {
                   <div className="low-stock-switch-title">{selectedLocation?.locationName || "No location selected"}</div>
                   <div className="low-stock-switch-subtitle">
                     Product rules override pack-size rules. Low stock rows are shown only when the source
-                    location has at least 1 bottle in the master CSV.
+                    location has at least 1 bottle in brands.csv.
                   </div>
                 </div>
               </div>
@@ -355,7 +355,7 @@ export function SettingsNotificationConfigPage() {
                   <div className="low-stock-switch-title">Nil Stock Notifications</div>
                   <div className="low-stock-switch-subtitle">
                     Send nil stock alerts only when the selected target location is zero and the source
-                    location has at least 1 bottle in the master CSV.
+                    location has at least 1 bottle in brands.csv.
                   </div>
                 </div>
                 <IonToggle

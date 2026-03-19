@@ -48,7 +48,7 @@ const settingItems = [
   },
   {
     title: "Best Selling",
-    subtitle: "Select products from master CSV",
+    subtitle: "Select products from brands.csv",
     icon: starOutline,
     path: "/settings/best-selling",
   },

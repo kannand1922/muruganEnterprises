@@ -1148,6 +1148,12 @@ body.barcode-scanner-active .ion-content {
   background: #000;
 }
 
+.web-scanner-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
 .web-scanner-video {
   width: 100%;
   height: 100%;
@@ -2197,9 +2203,9 @@ body.barcode-scanner-active .ion-content {
 .unchecked-filter-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-  gap: 10px;
+  gap: 8px;
   align-items: end;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .unchecked-filter-item {
@@ -2208,26 +2214,40 @@ body.barcode-scanner-active .ion-content {
 
 .unchecked-filter-clear-btn {
   margin: 0;
-  min-height: 46px;
+  min-height: 40px;
 }
 
 .verify-summary-box {
   border: 1px solid var(--color-border);
   border-radius: 8px;
   color: var(--color-text-primary);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   line-height: 1.3;
-  padding: 14px 16px;
-  margin-bottom: 12px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
   background: var(--color-bg);
 }
 
 .verify-subtitle {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 400;
   color: var(--color-text-secondary);
-  margin-bottom: 10px;
+  margin-bottom: 8px;
+}
+
+.verify-top-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  margin-bottom: 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--shop-color, var(--color-accent)) 28%, #cbd5e1 72%);
+  background: color-mix(in srgb, var(--shop-color, var(--color-accent)) 10%, #ffffff 90%);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .verify-list {
@@ -2238,14 +2258,20 @@ body.barcode-scanner-active .ion-content {
 }
 
 .verify-row {
-  padding: 14px 16px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--color-border);
 }
 
 .verify-row.is-selectable {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: flex-start;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.verify-row.is-selectable:active {
+  background: var(--color-bg-subtle);
 }
 
 .verify-row-body {
@@ -2254,7 +2280,7 @@ body.barcode-scanner-active .ion-content {
 }
 
 .verify-row-checkbox {
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .verify-row:last-child {
@@ -2264,16 +2290,16 @@ body.barcode-scanner-active .ion-content {
 .verify-row-title {
   margin: 0;
   color: var(--color-text-primary);
-  font-size: 14px;
-  line-height: 1.25;
+  font-size: 13px;
+  line-height: 1.2;
   font-weight: 600;
 }
 
 .verify-row-meta {
-  margin-top: 8px;
+  margin-top: 4px;
   color: var(--color-text-secondary);
-  font-size: 13px;
-  line-height: 1.3;
+  font-size: 12px;
+  line-height: 1.22;
 }
 
 .verify-row-badges {
