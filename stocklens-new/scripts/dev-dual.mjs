@@ -21,7 +21,7 @@ function spawnVite(label, args, extraEnv = {}) {
 
 const children = [
   spawnVite("http", ["--host", "--port", "5175"]),
-  spawnVite("https", ["--mode", "https", "--host", "--port", "5176"]),
+  spawnVite("https", ["--mode", "https", "--host", "--port", "5"]),
 ];
 
 let shuttingDown = false;

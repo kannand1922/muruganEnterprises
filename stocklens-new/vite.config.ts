@@ -6,7 +6,7 @@ import basicSsl from "@vitejs/plugin-basic-ssl";
 
 export default defineConfig(({ mode }) => {
   const useHttps = mode === "https";
-  const defaultPort = useHttps ? 5176 : 5175;
+  const defaultPort = 5175;
   const certPath = path.resolve(process.cwd(), "certs/dev-cert.pem");
   const keyPath = path.resolve(process.cwd(), "certs/dev-key.pem");
   const hasCustomCerts = fs.existsSync(certPath) && fs.existsSync(keyPath);

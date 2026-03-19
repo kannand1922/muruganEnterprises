@@ -154,7 +154,7 @@ export function SettingsCommonConfigPage() {
               <IonInput
                 value={backendUrlInput}
                 onIonInput={(e) => setBackendUrlInput(e.detail.value || "")}
-                placeholder="http://192.168.1.170:4000/new/api"
+                placeholder={DEFAULT_API_BASE_URL}
               />
             </IonItem>
             <IonNote color="medium">Default Endpoint: {DEFAULT_API_BASE_URL}</IonNote>
