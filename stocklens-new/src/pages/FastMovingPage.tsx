@@ -14,6 +14,7 @@ import {
   useIonToast,
 } from "@ionic/react";
 import { useEffect, useMemo, useState } from "react";
+import { useHistory } from "react-router-dom";
 import { getCurrentCycle } from "../api/cyclesApi";
 import { getShopLocations, type ShopLocation } from "../api/metaApi";
 import { getFastMovingSummary, type FastMovingRow } from "../api/stockApi";
@@ -37,6 +38,7 @@ function formatDateTime(value: string | null) {
 }
 
 export function FastMovingPage() {
+  const history = useHistory();
   const [presentToast] = useIonToast();
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<FastTab>("unchecked");
@@ -160,7 +162,16 @@ export function FastMovingPage() {
             ) : (
               <div className="fast-moving-list">
                 {filteredRows.map((row) => (
-                  <IonItem key={`${tab}_${row.itemCode}_${row.packValue}`} lines="none" className="fast-moving-row">
+                  <IonItem
+                    key={`${tab}_${row.itemCode}_${row.packValue}`}
+                    lines="none"
+                    button={true}
+                    detail={false}
+                    className="fast-moving-row"
+                    onClick={() =>
+                      history.push(`/stock?openItemCode=${encodeURIComponent(String(row.itemCode || ""))}`)
+                    }
+                  >
                     <IonLabel>
                       <h3 className="result-brand">{row.brandName || row.itemName}</h3>
                       <p className="result-details">{row.itemName}</p>

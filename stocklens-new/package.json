@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev-dual.mjs",
+    "dev:http": "vite",
+    "dev:https": "vite --mode https",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint src --ext .ts,.tsx"
@@ -32,6 +34,7 @@
     "@types/react-dom": "^19.0.4",
     "@types/react-router": "^5.1.20",
     "@types/react-router-dom": "^5.3.3",
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
     "@vitejs/plugin-react": "^4.3.4",
     "eslint": "^9.20.1",
     "typescript": "^5.7.3",

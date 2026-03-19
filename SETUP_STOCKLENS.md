@@ -100,7 +100,12 @@ cd server
 npm run dev
 ```
 
-Runs on `http://localhost:3100`.
+Runs on:
+
+```text
+http://localhost:4000
+https://localhost:4010
+```
 
 ### Optional: Auto-restart backend on crash (1s) + on file change
 
@@ -130,7 +135,63 @@ cd stocklens-new
 npm run dev
 ```
 
-Runs on `http://localhost:5175`.
+Runs on:
+
+```text
+http://localhost:5175
+https://localhost:5176
+```
+
+For phone Chrome camera testing, open the HTTPS frontend on LAN:
+
+```text
+https://<your-laptop-ip>:5176
+```
+
+Notes:
+- If `stocklens-new/certs/dev-cert.pem` and `stocklens-new/certs/dev-key.pem` exist, Vite uses them.
+- If those files do not exist, it falls back to an auto-generated self-signed cert.
+- For mobile Chrome camera access on another device, trusted certs are recommended.
+- Frontend HTTP dev uses port `5175`.
+- Frontend HTTPS dev uses port `5176`.
+- Frontend requests to `/new/api` are proxied to the local backend at `http://localhost:4000` by default. You can override that with `BACKEND_PROXY_TARGET`.
+
+### Optional: HTTPS backend
+
+The backend now supports HTTPS too automatically.
+
+Backend dev port:
+- HTTP: `4000`
+- HTTPS: `4010`
+
+HTTPS cert behavior:
+1. `SERVER_SSL_CERT_FILE` and `SERVER_SSL_KEY_FILE`
+2. `stocklens-new/certs/dev-cert.pem` and `stocklens-new/certs/dev-key.pem`
+3. `server/certs/dev-cert.pem` and `server/certs/dev-key.pem`
+4. if none exist, it auto-generates a self-signed dev certificate
+
+Run backend:
+
+```bash
+cd server
+npm run dev
+```
+
+If certs are found, it will also expose:
+
+```text
+https://<your-laptop-ip>:4010
+```
+
+Example trusted cert setup with `mkcert` on Mac:
+
+```bash
+brew install mkcert
+mkcert -install
+cd stocklens-new
+mkdir -p certs
+mkcert -key-file certs/dev-key.pem -cert-file certs/dev-cert.pem localhost 127.0.0.1 ::1 <your-laptop-ip>
+```
 
 ## 7) Health Checks
 

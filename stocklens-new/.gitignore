@@ -3,3 +3,4 @@ dist
 .env
 .DS_Store
 android/app/google-services.json
+certs/

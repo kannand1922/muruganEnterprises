@@ -48,7 +48,7 @@ import {
 import { Capacitor } from "@capacitor/core";
 import { Scanner as WebBarcodeScanner, type IDetectedBarcode } from "@yudiel/react-qr-scanner";
 import { prepareZXingModule, type BarcodeFormat as WebBarcodeFormat } from "barcode-detector";
-import { useHistory } from "react-router-dom";
+import { useHistory, useLocation } from "react-router-dom";
 import readerWasmUrl from "zxing-wasm/reader/zxing_reader.wasm?url";
 import { AppTopBar } from "../components/common/AppTopBar";
 import { getCurrentCycle } from "../api/cyclesApi";
@@ -528,6 +528,7 @@ export function StockEntryPage() {
   const [presentToast] = useIonToast();
   const [presentStockMismatchAlert] = useIonAlert();
   const history = useHistory();
+  const location = useLocation();
   const [mode, setMode] = useState<EntryMode>("name");
   const [masterRows, setMasterRows] = useState<MasterProduct[]>([]);
   const [loadingMaster, setLoadingMaster] = useState(false);
@@ -588,6 +589,7 @@ export function StockEntryPage() {
   const recheckPromptShownRef = useRef<Set<string>>(new Set());
   const dashboardRefreshInFlightRef = useRef(false);
   const pendingAutoPrefillRef = useRef(false);
+  const handledOpenItemCodeRef = useRef("");
 
   const currentLocation =
     locations.find((location) => location.id === currentLocationId) || null;
@@ -1523,6 +1525,49 @@ export function StockEntryPage() {
     setSelectedProduct(product);
     setShowStockModal(true);
   }
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const requestedItemCode = normalizeCodeValue(params.get("openItemCode") || "");
+
+    if (!requestedItemCode) {
+      handledOpenItemCodeRef.current = "";
+      return;
+    }
+
+    if (loadingMaster || isMasterBlocked || masterRows.length === 0) {
+      return;
+    }
+
+    if (handledOpenItemCodeRef.current === requestedItemCode) {
+      return;
+    }
+
+    const matchedProduct =
+      masterRows.find(
+        (row) => normalizeCodeValue(getFieldValue(row.itemCode)) === requestedItemCode
+      ) || null;
+
+    handledOpenItemCodeRef.current = requestedItemCode;
+
+    const nextParams = new URLSearchParams(location.search);
+    nextParams.delete("openItemCode");
+    history.replace({
+      pathname: location.pathname,
+      search: nextParams.toString() ? `?${nextParams.toString()}` : "",
+    });
+
+    if (!matchedProduct) {
+      presentToast({
+        message: "Product not found in stock entry.",
+        color: "warning",
+        duration: 1600,
+      });
+      return;
+    }
+
+    openProductEditor(matchedProduct, "manual");
+  }, [history, isMasterBlocked, loadingMaster, location.pathname, location.search, masterRows, presentToast]);
 
   useEffect(() => {
     if (!showStockModal || !selectedProduct || !pendingAutoPrefillRef.current) {

@@ -12,7 +12,7 @@ import {
   useIonToast,
 } from "@ionic/react";
 import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useHistory, useLocation } from "react-router-dom";
 import { getCurrentCycle } from "../api/cyclesApi";
 import { getShopLocations, getWorkers, type ShopLocation } from "../api/metaApi";
 import {
@@ -45,6 +45,7 @@ function isNonZeroDiffRow(row: UnfinishedStockRow) {
 }
 
 export function OperatorFinishPage() {
+  const history = useHistory();
   const [presentToast] = useIonToast();
   const location = useLocation();
   const [loading, setLoading] = useState(false);
@@ -249,7 +250,16 @@ export function OperatorFinishPage() {
                 {unfinishedRows.map((row) => {
                   const locationName = locationById.get(row.shopLocationId)?.locationName || `#${row.shopLocationId}`;
                   return (
-                    <IonItem key={row.id} lines="none" className="search-result-items finish-result-item">
+                    <IonItem
+                      key={row.id}
+                      lines="none"
+                      button={true}
+                      detail={false}
+                      className="search-result-items finish-result-item"
+                      onClick={() =>
+                        history.push(`/stock?openItemCode=${encodeURIComponent(String(row.itemCode || ""))}`)
+                      }
+                    >
                       <IonLabel>
                         <h3 className="result-brand">{row.itemName || row.itemCode}</h3>
                         <p className="result-details">

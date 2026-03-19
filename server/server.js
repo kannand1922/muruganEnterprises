@@ -1,7 +1,11 @@
 const express = require("express");
 const cors = require("cors");
+const http = require("http");
+const https = require("https");
+const os = require("os");
 const path = require("path");
 const fs = require("fs");
+const selfsigned = require("selfsigned");
 const { printerServerPort } = require("../shared/config/ports");
 const {
   stockLensPaths,
@@ -34,10 +38,86 @@ const {
 
 const app = express();
 
-let server;
+let httpServer;
+let httpsServer;
 let isShuttingDown = false;
 
 const REQUIRED_BUILD_FILE = path.resolve(stockLensScannerConfigPaths.requiredBuildFile);
+const DEFAULT_HTTPS_PORT = Number(process.env.PRINTER_SERVER_HTTPS_PORT || 4010);
+
+const getLocalIpAltNames = () => {
+  const interfaces = os.networkInterfaces();
+  const altNames = [];
+
+  Object.values(interfaces).forEach((entries) => {
+    (entries || []).forEach((entry) => {
+      if (!entry || entry.internal) return;
+      if (entry.family !== "IPv4") return;
+      altNames.push({ type: 7, ip: entry.address });
+    });
+  });
+
+  return altNames;
+};
+
+const resolveHttpsCredentials = async () => {
+  const candidatePairs = [
+    {
+      cert: process.env.SERVER_SSL_CERT_FILE,
+      key: process.env.SERVER_SSL_KEY_FILE,
+    },
+    {
+      cert: path.resolve(__dirname, "../stocklens-new/certs/dev-cert.pem"),
+      key: path.resolve(__dirname, "../stocklens-new/certs/dev-key.pem"),
+    },
+    {
+      cert: path.resolve(__dirname, "certs/dev-cert.pem"),
+      key: path.resolve(__dirname, "certs/dev-key.pem"),
+    },
+  ];
+
+  for (const pair of candidatePairs) {
+    const certPath = String(pair.cert || "").trim();
+    const keyPath = String(pair.key || "").trim();
+    if (!certPath || !keyPath) continue;
+    if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) continue;
+
+    return {
+      cert: fs.readFileSync(certPath),
+      key: fs.readFileSync(keyPath),
+      certPath,
+      keyPath,
+    };
+  }
+
+  const generated = await selfsigned.generate(
+    [
+      { name: "commonName", value: "localhost" },
+      { name: "organizationName", value: "StockLens Dev" },
+    ],
+    {
+      algorithm: "sha256",
+      days: 30,
+      keySize: 2048,
+      extensions: [
+        {
+          name: "subjectAltName",
+          altNames: [
+            { type: 2, value: "localhost" },
+            { type: 7, ip: "127.0.0.1" },
+            ...getLocalIpAltNames(),
+          ],
+        },
+      ],
+    }
+  );
+
+  return {
+    cert: generated.cert,
+    key: generated.private,
+    generated: true,
+  };
+};
 
 const closePrisma = async () => {
   try {
@@ -57,10 +137,20 @@ const shutdown = (reason, exitCode = 0) => {
   }
   stopLowStockMonitor();
   stopUnfinishedAutoFinishService();
-  if (server) {
-    server.close(async () => {
+  const runningServers = [httpServer, httpsServer].filter(Boolean);
+  if (runningServers.length > 0) {
+    let pending = runningServers.length;
+    const finishClose = async () => {
+      pending -= 1;
+      if (pending > 0) return;
       await closePrisma();
       process.exit(exitCode);
+    };
+
+    runningServers.forEach((instance) => {
+      instance.close(() => {
+        void finishClose();
+      });
     });
     setTimeout(() => {
       process.exit(exitCode);
@@ -138,10 +228,36 @@ const logBrandsCsvModifiedTime = () => {
   }
 };
 
-server = app.listen(printerServerPort, "0.0.0.0", () => {
-  console.log(
-    `Thermal printer server running on http://localhost:${printerServerPort}`
+async function startServer() {
+  const httpsCredentials = await resolveHttpsCredentials();
+
+  httpServer = http.createServer(app);
+  httpsServer = https.createServer(
+    {
+      cert: httpsCredentials.cert,
+      key: httpsCredentials.key,
+    },
+    app
   );
+
+  httpServer.listen(printerServerPort, "0.0.0.0", () => {
+    console.log(
+      `Thermal printer server running on http://localhost:${printerServerPort}`
+    );
+  });
+
+  httpsServer.listen(DEFAULT_HTTPS_PORT, "0.0.0.0", () => {
+    console.log(
+      `Thermal printer server running on https://localhost:${DEFAULT_HTTPS_PORT}`
+    );
+    if (httpsCredentials.generated) {
+      console.log("HTTPS cert: auto-generated self-signed development certificate");
+    } else {
+      console.log(`HTTPS cert: ${httpsCredentials.certPath}`);
+      console.log(`HTTPS key: ${httpsCredentials.keyPath}`);
+    }
+  });
+
   logBrandsCsvModifiedTime();
   void startLowStockMonitor();
   void startUnfinishedAutoFinishService();
@@ -167,6 +283,11 @@ server = app.listen(printerServerPort, "0.0.0.0", () => {
     "  POST /api/print/difference-by-person/:date?mode=individual|common&printer=IP - Print person diff report"
   );
   console.log("  GET  /api/print/status - Print status");
+}
+
+void startServer().catch((error) => {
+  console.error("Failed to start server:", error);
+  shutdown("startup_failure", 1);
 });
 
 module.exports = app;
