@@ -10,14 +10,13 @@ import {
   IonModal,
   IonPage,
   IonSearchbar,
-  IonSelect,
-  IonSelectOption,
   IonSpinner,
   IonText,
   useIonToast,
 } from "@ionic/react";
 import {
   addOutline,
+  chevronForwardOutline,
   cloudUploadOutline,
   closeOutline,
   cubeOutline,
@@ -27,6 +26,10 @@ import {
 } from "ionicons/icons";
 import { useEffect, useMemo, useState } from "react";
 import { getCurrentCycle } from "../api/cyclesApi";
+import {
+  MultiSelectFilterPopover,
+  type MultiSelectFilterOption,
+} from "../components/common/MultiSelectFilterPopover";
 import {
   getAllMasterProducts,
   getPrinters,
@@ -51,7 +54,33 @@ import { AppTopBar } from "../components/common/AppTopBar";
 const CURRENT_OPERATOR_ID_KEY = "stocklens_current_operator_id";
 const CURRENT_PRINTER_ID_KEY = "stocklens_current_printer_id";
 
-type RowFilter = "all" | "unchecked" | "mismatched";
+type RowFilter = "unchecked" | "mismatched";
+
+function normalizeFilterValue(value: string | null | undefined) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getUniqueFilterValues(values: string[]) {
+  const seen = new Set<string>();
+  const nextValues: string[] = [];
+
+  values.forEach((value) => {
+    const trimmed = String(value || "").trim();
+    const normalized = normalizeFilterValue(trimmed);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    nextValues.push(trimmed);
+  });
+
+  return nextValues;
+}
+
+function areFilterArraysEqual(left: string[], right: string[]) {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => normalizeFilterValue(value) === normalizeFilterValue(right[index]))
+  );
+}
 
 type CombinedVerifyRow = {
   rowType: "unchecked" | "mismatched";
@@ -193,9 +222,9 @@ export function UncheckedPage() {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<CombinedVerifyRow[]>([]);
   const [searchText, setSearchText] = useState("");
-  const [itemFilter, setItemFilter] = useState("all");
-  const [packFilter, setPackFilter] = useState("all");
-  const [rowFilter, setRowFilter] = useState<RowFilter>("all");
+  const [itemFilters, setItemFilters] = useState<string[]>([]);
+  const [packFilters, setPackFilters] = useState<string[]>([]);
+  const [rowFilters, setRowFilters] = useState<RowFilter[]>([]);
   const [locationName, setLocationName] = useState("");
   const [errorText, setErrorText] = useState("");
   const [selectedPrinterId, setSelectedPrinterId] = useState<number | null>(null);
@@ -214,6 +243,15 @@ export function UncheckedPage() {
   const [proofPathInput, setProofPathInput] = useState("");
   const [proofFileName, setProofFileName] = useState("");
   const [creatingDiff, setCreatingDiff] = useState(false);
+  const [typeFilterPopoverOpen, setTypeFilterPopoverOpen] = useState(false);
+  const [typeFilterPopoverEvent, setTypeFilterPopoverEvent] = useState<Event | undefined>(undefined);
+  const [draftRowFilters, setDraftRowFilters] = useState<RowFilter[]>([]);
+  const [itemFilterPopoverOpen, setItemFilterPopoverOpen] = useState(false);
+  const [itemFilterPopoverEvent, setItemFilterPopoverEvent] = useState<Event | undefined>(undefined);
+  const [draftItemFilters, setDraftItemFilters] = useState<string[]>([]);
+  const [packFilterPopoverOpen, setPackFilterPopoverOpen] = useState(false);
+  const [packFilterPopoverEvent, setPackFilterPopoverEvent] = useState<Event | undefined>(undefined);
+  const [draftPackFilters, setDraftPackFilters] = useState<string[]>([]);
 
   useEffect(() => {
     const storedPrinterId = parsePositiveInt(localStorage.getItem(CURRENT_PRINTER_ID_KEY));
@@ -322,28 +360,76 @@ export function UncheckedPage() {
     ).sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
   }, [rows]);
 
-  useEffect(() => {
-    if (itemFilter !== "all" && !itemOptions.includes(itemFilter)) {
-      setItemFilter("all");
-    }
-  }, [itemFilter, itemOptions]);
+  const itemFilterOptionMap = useMemo(
+    () => new Map(itemOptions.map((itemName) => [normalizeFilterValue(itemName), itemName])),
+    [itemOptions]
+  );
+  const packFilterOptionMap = useMemo(
+    () => new Map(packOptions.map((packValue) => [normalizeFilterValue(packValue), packValue])),
+    [packOptions]
+  );
+  const normalizedItemFilterSet = useMemo(
+    () => new Set(itemFilters.map((value) => normalizeFilterValue(value)).filter(Boolean)),
+    [itemFilters]
+  );
+  const normalizedPackFilterSet = useMemo(
+    () => new Set(packFilters.map((value) => normalizeFilterValue(value)).filter(Boolean)),
+    [packFilters]
+  );
+  const normalizedRowFilterSet = useMemo(
+    () => new Set(rowFilters.map((value) => normalizeFilterValue(value)).filter(Boolean)),
+    [rowFilters]
+  );
+  const itemFilterOptions = useMemo<MultiSelectFilterOption[]>(
+    () => itemOptions.map((itemName) => ({ value: itemName, label: itemName })),
+    [itemOptions]
+  );
+  const packFilterOptions = useMemo<MultiSelectFilterOption[]>(
+    () => packOptions.map((packValue) => ({ value: packValue, label: packValue })),
+    [packOptions]
+  );
 
   useEffect(() => {
-    if (packFilter !== "all" && !packOptions.includes(packFilter)) {
-      setPackFilter("all");
-    }
-  }, [packFilter, packOptions]);
+    setItemFilters((previous) => {
+      const nextValues = getUniqueFilterValues(
+        previous
+          .map((value) => itemFilterOptionMap.get(normalizeFilterValue(value)) || "")
+          .filter(Boolean)
+      );
+      return areFilterArraysEqual(previous, nextValues) ? previous : nextValues;
+    });
+  }, [itemFilterOptionMap]);
+
+  useEffect(() => {
+    setPackFilters((previous) => {
+      const nextValues = getUniqueFilterValues(
+        previous
+          .map((value) => packFilterOptionMap.get(normalizeFilterValue(value)) || "")
+          .filter(Boolean)
+      );
+      return areFilterArraysEqual(previous, nextValues) ? previous : nextValues;
+    });
+  }, [packFilterOptionMap]);
 
   const filteredRows = useMemo(() => {
     const query = searchText.trim().toLowerCase();
     return rows.filter((row) => {
-      if (rowFilter !== "all" && row.rowType !== rowFilter) {
+      if (
+        normalizedRowFilterSet.size > 0 &&
+        !normalizedRowFilterSet.has(normalizeFilterValue(row.rowType))
+      ) {
         return false;
       }
-      if (itemFilter !== "all" && String(row.itemName || "").trim() !== itemFilter) {
+      if (
+        normalizedItemFilterSet.size > 0 &&
+        !normalizedItemFilterSet.has(normalizeFilterValue(row.itemName))
+      ) {
         return false;
       }
-      if (packFilter !== "all" && String(row.packValue || "").trim() !== packFilter) {
+      if (
+        normalizedPackFilterSet.size > 0 &&
+        !normalizedPackFilterSet.has(normalizeFilterValue(row.packValue))
+      ) {
         return false;
       }
       if (!query) {
@@ -360,7 +446,7 @@ export function UncheckedPage() {
         code.includes(query)
       );
     });
-  }, [rows, searchText, itemFilter, packFilter, rowFilter]);
+  }, [rows, searchText, normalizedItemFilterSet, normalizedPackFilterSet, normalizedRowFilterSet]);
 
   const uncheckedCount = useMemo(
     () => rows.filter((row) => row.rowType === "unchecked").length,
@@ -370,15 +456,58 @@ export function UncheckedPage() {
     () => rows.filter((row) => row.rowType === "mismatched").length,
     [rows]
   );
-  const rowFilterLabel = useMemo(() => {
-    if (rowFilter === "unchecked") {
-      return `Unchecked (${uncheckedCount})`;
+  const typeFilterOptions = useMemo<MultiSelectFilterOption[]>(
+    () => [
+      { value: "unchecked", label: `Unchecked (${uncheckedCount})` },
+      { value: "mismatched", label: `Mismatched (${mismatchedCount})` },
+    ],
+    [mismatchedCount, uncheckedCount]
+  );
+  const selectedTypeFilterText = useMemo(() => {
+    if (rowFilters.length === 0) {
+      return `All (${rows.length})`;
     }
-    if (rowFilter === "mismatched") {
-      return `Mismatched (${mismatchedCount})`;
+    if (rowFilters.length === 1) {
+      return rowFilters[0] === "unchecked"
+        ? `Unchecked (${uncheckedCount})`
+        : `Mismatched (${mismatchedCount})`;
     }
-    return `All (${rows.length})`;
-  }, [mismatchedCount, rowFilter, rows.length, uncheckedCount]);
+    return `${rowFilters.length} selected`;
+  }, [mismatchedCount, rowFilters, rows.length, uncheckedCount]);
+  const selectedItemFilterText = useMemo(() => {
+    if (itemFilters.length === 0) return "All Items";
+    if (itemFilters.length === 1) return itemFilters[0];
+    return `${itemFilters.length} selected`;
+  }, [itemFilters]);
+  const selectedPackFilterText = useMemo(() => {
+    if (packFilters.length === 0) return "All Packs";
+    if (packFilters.length === 1) return packFilters[0];
+    return `${packFilters.length} selected`;
+  }, [packFilters]);
+  const hasMismatchedRowsSelected = normalizedRowFilterSet.has("mismatched");
+  const hasUncheckedRowsSelected = normalizedRowFilterSet.has("unchecked");
+  const printFilterLabel = useMemo(() => {
+    if (normalizedRowFilterSet.size === 0) return "FILTERED REVIEW";
+    if (hasUncheckedRowsSelected && hasMismatchedRowsSelected) return "UNCHECKED + MISMATCHED";
+    if (hasMismatchedRowsSelected) return "MISMATCHED";
+    if (hasUncheckedRowsSelected) return "UNCHECKED";
+    return "FILTERED REVIEW";
+  }, [hasMismatchedRowsSelected, hasUncheckedRowsSelected, normalizedRowFilterSet.size]);
+
+  function applyRowFilters() {
+    setRowFilters(getUniqueFilterValues(draftRowFilters) as RowFilter[]);
+    setTypeFilterPopoverOpen(false);
+  }
+
+  function applyItemFilters() {
+    setItemFilters(getUniqueFilterValues(draftItemFilters));
+    setItemFilterPopoverOpen(false);
+  }
+
+  function applyPackFilters() {
+    setPackFilters(getUniqueFilterValues(draftPackFilters));
+    setPackFilterPopoverOpen(false);
+  }
 
   async function handlePrintFilteredRows() {
     if (filteredRows.length === 0) {
@@ -402,13 +531,8 @@ export function UncheckedPage() {
     setPrinting(true);
     try {
       const backendFilter =
-        rowFilter === "mismatched" ? "unmatched" : rowFilter === "unchecked" ? "unchecked" : "unchecked";
-      const filterLabel =
-        rowFilter === "mismatched"
-          ? "MISMATCHED"
-          : rowFilter === "unchecked"
-            ? "UNCHECKED"
-            : "FILTERED UNCHECKED";
+        hasMismatchedRowsSelected && !hasUncheckedRowsSelected ? "unmatched" : "unchecked";
+      const filterLabel = printFilterLabel;
 
       const result = await printVerificationList({
         printerId: selectedPrinterId,
@@ -686,60 +810,62 @@ export function UncheckedPage() {
           />
 
           <div className="unchecked-filter-row">
-            <IonItem lines="none" className="search-filter-item unchecked-filter-item">
+            <IonItem
+              lines="none"
+              className="search-filter-item search-filter-item-button unchecked-filter-item"
+              button={true}
+              detail={false}
+              onClick={(event) => {
+                setTypeFilterPopoverEvent(event.nativeEvent);
+                setDraftRowFilters(rowFilters);
+                setTypeFilterPopoverOpen(true);
+              }}
+            >
               <IonLabel>Type</IonLabel>
-              <IonSelect
-                value={rowFilter}
-                selectedText={rowFilterLabel}
-                interface="popover"
-                onIonChange={(event) => setRowFilter((event.detail.value as RowFilter) || "all")}
-              >
-                <IonSelectOption value="all">All ({rows.length})</IonSelectOption>
-                <IonSelectOption value="unchecked">Unchecked ({uncheckedCount})</IonSelectOption>
-                <IonSelectOption value="mismatched">Mismatched ({mismatchedCount})</IonSelectOption>
-              </IonSelect>
+              <span className="search-filter-item-value">{selectedTypeFilterText}</span>
+              <IonIcon icon={chevronForwardOutline} className="search-filter-item-chevron" />
             </IonItem>
 
-            <IonItem lines="none" className="search-filter-item unchecked-filter-item">
+            <IonItem
+              lines="none"
+              className="search-filter-item search-filter-item-button unchecked-filter-item"
+              button={true}
+              detail={false}
+              onClick={(event) => {
+                setItemFilterPopoverEvent(event.nativeEvent);
+                setDraftItemFilters(itemFilters);
+                setItemFilterPopoverOpen(true);
+              }}
+            >
               <IonLabel>Item</IonLabel>
-              <IonSelect
-                value={itemFilter}
-                interface="popover"
-                onIonChange={(event) => setItemFilter(String(event.detail.value || "all"))}
-              >
-                <IonSelectOption value="all">All Items</IonSelectOption>
-                {itemOptions.map((itemName) => (
-                  <IonSelectOption key={itemName} value={itemName}>
-                    {itemName}
-                  </IonSelectOption>
-                ))}
-              </IonSelect>
+              <span className="search-filter-item-value">{selectedItemFilterText}</span>
+              <IonIcon icon={chevronForwardOutline} className="search-filter-item-chevron" />
             </IonItem>
 
-            <IonItem lines="none" className="search-filter-item unchecked-filter-item">
+            <IonItem
+              lines="none"
+              className="search-filter-item search-filter-item-button unchecked-filter-item"
+              button={true}
+              detail={false}
+              onClick={(event) => {
+                setPackFilterPopoverEvent(event.nativeEvent);
+                setDraftPackFilters(packFilters);
+                setPackFilterPopoverOpen(true);
+              }}
+            >
               <IonLabel>Pack</IonLabel>
-              <IonSelect
-                value={packFilter}
-                interface="popover"
-                onIonChange={(event) => setPackFilter(String(event.detail.value || "all"))}
-              >
-                <IonSelectOption value="all">All Packs</IonSelectOption>
-                {packOptions.map((packValue) => (
-                  <IonSelectOption key={packValue} value={packValue}>
-                    {packValue}
-                  </IonSelectOption>
-                ))}
-              </IonSelect>
+              <span className="search-filter-item-value">{selectedPackFilterText}</span>
+              <IonIcon icon={chevronForwardOutline} className="search-filter-item-chevron" />
             </IonItem>
 
             <IonButton
               fill="solid"
               className="search-filter-cancel-btn unchecked-filter-clear-btn"
-              disabled={rowFilter === "all" && itemFilter === "all" && packFilter === "all" && !searchText.trim()}
+              disabled={rowFilters.length === 0 && itemFilters.length === 0 && packFilters.length === 0 && !searchText.trim()}
               onClick={() => {
-                setRowFilter("all");
-                setItemFilter("all");
-                setPackFilter("all");
+                setRowFilters([]);
+                setItemFilters([]);
+                setPackFilters([]);
                 setSearchText("");
               }}
             >
@@ -748,7 +874,7 @@ export function UncheckedPage() {
           </div>
 
           <div className="verify-summary-box">
-            {searchText || rowFilter !== "all" || itemFilter !== "all" || packFilter !== "all"
+            {searchText || rowFilters.length > 0 || itemFilters.length > 0 || packFilters.length > 0
               ? `${filteredRows.length} of ${rows.length} products match the selected filters`
               : `${rows.length} products are pending review in this cycle`}
           </div>
@@ -777,7 +903,7 @@ export function UncheckedPage() {
             <div className="operator-required-box">{errorText}</div>
           ) : filteredRows.length === 0 ? (
             <div className="stock-empty">
-              {searchText || rowFilter !== "all" || itemFilter !== "all" || packFilter !== "all"
+              {searchText || rowFilters.length > 0 || itemFilters.length > 0 || packFilters.length > 0
                 ? "No products found for the selected search or filters."
                 : "No unchecked or mismatched products."}
             </div>
@@ -822,6 +948,48 @@ export function UncheckedPage() {
           )}
         </div>
       </IonContent>
+
+      <MultiSelectFilterPopover
+        isOpen={typeFilterPopoverOpen}
+        event={typeFilterPopoverEvent}
+        draftValues={draftRowFilters}
+        options={typeFilterOptions}
+        allLabel={`All (${rows.length})`}
+        onDraftValuesChange={(values) => setDraftRowFilters(values as RowFilter[])}
+        onApply={applyRowFilters}
+        onDidDismiss={() => {
+          setTypeFilterPopoverOpen(false);
+          setDraftRowFilters(rowFilters);
+        }}
+      />
+
+      <MultiSelectFilterPopover
+        isOpen={itemFilterPopoverOpen}
+        event={itemFilterPopoverEvent}
+        draftValues={draftItemFilters}
+        options={itemFilterOptions}
+        allLabel="All Items"
+        onDraftValuesChange={setDraftItemFilters}
+        onApply={applyItemFilters}
+        onDidDismiss={() => {
+          setItemFilterPopoverOpen(false);
+          setDraftItemFilters(itemFilters);
+        }}
+      />
+
+      <MultiSelectFilterPopover
+        isOpen={packFilterPopoverOpen}
+        event={packFilterPopoverEvent}
+        draftValues={draftPackFilters}
+        options={packFilterOptions}
+        allLabel="All Packs"
+        onDraftValuesChange={setDraftPackFilters}
+        onApply={applyPackFilters}
+        onDidDismiss={() => {
+          setPackFilterPopoverOpen(false);
+          setDraftPackFilters(packFilters);
+        }}
+      />
 
       <IonModal
         isOpen={showStockModal}

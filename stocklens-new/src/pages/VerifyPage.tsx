@@ -8,16 +8,25 @@ import {
   IonModal,
   IonPage,
   IonSearchbar,
-  IonSelect,
-  IonSelectOption,
   IonSpinner,
   useIonToast,
 } from "@ionic/react";
-import { addOutline, closeOutline, cubeOutline, removeOutline, wineOutline } from "ionicons/icons";
+import {
+  addOutline,
+  chevronForwardOutline,
+  closeOutline,
+  cubeOutline,
+  removeOutline,
+  wineOutline,
+} from "ionicons/icons";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { getCurrentCycle } from "../api/cyclesApi";
 import { getWorkers } from "../api/metaApi";
+import {
+  MultiSelectFilterPopover,
+  type MultiSelectFilterOption,
+} from "../components/common/MultiSelectFilterPopover";
 import {
   finishUnfinishedStock,
   getVerifyMismatchedFinished,
@@ -30,6 +39,32 @@ import { AppTopBar } from "../components/common/AppTopBar";
 
 const CURRENT_OPERATOR_ID_KEY = "stocklens_current_operator_id";
 const CURRENT_OPERATOR_NAME_KEY = "stocklens_current_operator_name";
+
+function normalizeFilterValue(value: string | null | undefined) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getUniqueFilterValues(values: string[]) {
+  const seen = new Set<string>();
+  const nextValues: string[] = [];
+
+  values.forEach((value) => {
+    const trimmed = String(value || "").trim();
+    const normalized = normalizeFilterValue(trimmed);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    nextValues.push(trimmed);
+  });
+
+  return nextValues;
+}
+
+function areFilterArraysEqual(left: string[], right: string[]) {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => normalizeFilterValue(value) === normalizeFilterValue(right[index]))
+  );
+}
 
 function parsePositiveInt(rawValue: string | null) {
   const parsed = Number(rawValue);
@@ -62,8 +97,8 @@ export function VerifyPage() {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<VerifyMismatchedFinishedRow[]>([]);
   const [searchText, setSearchText] = useState("");
-  const [itemFilter, setItemFilter] = useState("all");
-  const [packFilter, setPackFilter] = useState("all");
+  const [itemFilters, setItemFilters] = useState<string[]>([]);
+  const [packFilters, setPackFilters] = useState<string[]>([]);
   const [operatorId, setOperatorId] = useState<number | null>(null);
   const [operatorName, setOperatorName] = useState("");
   const [errorText, setErrorText] = useState("");
@@ -72,6 +107,12 @@ export function VerifyPage() {
   const [packQty, setPackQty] = useState("");
   const [bottleQty, setBottleQty] = useState("");
   const [saving, setSaving] = useState(false);
+  const [itemFilterPopoverOpen, setItemFilterPopoverOpen] = useState(false);
+  const [itemFilterPopoverEvent, setItemFilterPopoverEvent] = useState<Event | undefined>(undefined);
+  const [draftItemFilters, setDraftItemFilters] = useState<string[]>([]);
+  const [packFilterPopoverOpen, setPackFilterPopoverOpen] = useState(false);
+  const [packFilterPopoverEvent, setPackFilterPopoverEvent] = useState<Event | undefined>(undefined);
+  const [draftPackFilters, setDraftPackFilters] = useState<string[]>([]);
 
   async function loadVerificationRows() {
     setLoading(true);
@@ -137,25 +178,76 @@ export function VerifyPage() {
     ).sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
   }, [rows]);
 
-  useEffect(() => {
-    if (itemFilter !== "all" && !itemOptions.includes(itemFilter)) {
-      setItemFilter("all");
-    }
-  }, [itemFilter, itemOptions]);
+  const itemFilterOptionMap = useMemo(
+    () => new Map(itemOptions.map((itemName) => [normalizeFilterValue(itemName), itemName])),
+    [itemOptions]
+  );
+  const packFilterOptionMap = useMemo(
+    () => new Map(packOptions.map((packValue) => [normalizeFilterValue(packValue), packValue])),
+    [packOptions]
+  );
+  const normalizedItemFilterSet = useMemo(
+    () => new Set(itemFilters.map((value) => normalizeFilterValue(value)).filter(Boolean)),
+    [itemFilters]
+  );
+  const normalizedPackFilterSet = useMemo(
+    () => new Set(packFilters.map((value) => normalizeFilterValue(value)).filter(Boolean)),
+    [packFilters]
+  );
+  const itemFilterOptions = useMemo<MultiSelectFilterOption[]>(
+    () => itemOptions.map((itemName) => ({ value: itemName, label: itemName })),
+    [itemOptions]
+  );
+  const packFilterOptions = useMemo<MultiSelectFilterOption[]>(
+    () => packOptions.map((packValue) => ({ value: packValue, label: packValue })),
+    [packOptions]
+  );
+  const selectedItemFilterText = useMemo(() => {
+    if (itemFilters.length === 0) return "All Items";
+    if (itemFilters.length === 1) return itemFilters[0];
+    return `${itemFilters.length} selected`;
+  }, [itemFilters]);
+  const selectedPackFilterText = useMemo(() => {
+    if (packFilters.length === 0) return "All Packs";
+    if (packFilters.length === 1) return packFilters[0];
+    return `${packFilters.length} selected`;
+  }, [packFilters]);
 
   useEffect(() => {
-    if (packFilter !== "all" && !packOptions.includes(packFilter)) {
-      setPackFilter("all");
-    }
-  }, [packFilter, packOptions]);
+    setItemFilters((previous) => {
+      const nextValues = getUniqueFilterValues(
+        previous
+          .map((value) => itemFilterOptionMap.get(normalizeFilterValue(value)) || "")
+          .filter(Boolean)
+      );
+      return areFilterArraysEqual(previous, nextValues) ? previous : nextValues;
+    });
+  }, [itemFilterOptionMap]);
+
+  useEffect(() => {
+    setPackFilters((previous) => {
+      const nextValues = getUniqueFilterValues(
+        previous
+          .map((value) => packFilterOptionMap.get(normalizeFilterValue(value)) || "")
+          .filter(Boolean)
+      );
+      return areFilterArraysEqual(previous, nextValues) ? previous : nextValues;
+    });
+  }, [packFilterOptionMap]);
 
   const filteredRows = useMemo(() => {
     const query = searchText.trim().toLowerCase();
     return rows.filter((row) => {
-      if (itemFilter !== "all" && String(row.itemName || "").trim() !== itemFilter) {
+      if (
+        normalizedItemFilterSet.size > 0 &&
+        !normalizedItemFilterSet.has(normalizeFilterValue(row.itemName))
+      ) {
         return false;
       }
-      if (packFilter !== "all" && String(row.packValue || "").trim() !== packFilter) {
+      if (
+        normalizedPackFilterSet.size > 0 &&
+        !normalizedPackFilterSet.has(normalizeFilterValue(row.packValue))
+      ) {
         return false;
       }
       if (!query) {
@@ -172,7 +264,17 @@ export function VerifyPage() {
         code.includes(query)
       );
     });
-  }, [rows, searchText, itemFilter, packFilter]);
+  }, [rows, searchText, normalizedItemFilterSet, normalizedPackFilterSet]);
+
+  function applyItemFilters() {
+    setItemFilters(getUniqueFilterValues(draftItemFilters));
+    setItemFilterPopoverOpen(false);
+  }
+
+  function applyPackFilters() {
+    setPackFilters(getUniqueFilterValues(draftPackFilters));
+    setPackFilterPopoverOpen(false);
+  }
 
   const selectedProductBpc = Number(selectedRow?.bpc) || 12;
   const enteredCases = Number.parseInt(packQty || "0", 10) || 0;
@@ -312,45 +414,45 @@ export function VerifyPage() {
           />
 
           <div className="unchecked-filter-row">
-            <IonItem lines="none" className="search-filter-item unchecked-filter-item">
+            <IonItem
+              lines="none"
+              className="search-filter-item search-filter-item-button unchecked-filter-item"
+              button={true}
+              detail={false}
+              onClick={(event) => {
+                setItemFilterPopoverEvent(event.nativeEvent);
+                setDraftItemFilters(itemFilters);
+                setItemFilterPopoverOpen(true);
+              }}
+            >
               <IonLabel>Item</IonLabel>
-              <IonSelect
-                value={itemFilter}
-                interface="popover"
-                onIonChange={(event) => setItemFilter(String(event.detail.value || "all"))}
-              >
-                <IonSelectOption value="all">All Items</IonSelectOption>
-                {itemOptions.map((itemName) => (
-                  <IonSelectOption key={itemName} value={itemName}>
-                    {itemName}
-                  </IonSelectOption>
-                ))}
-              </IonSelect>
+              <span className="search-filter-item-value">{selectedItemFilterText}</span>
+              <IonIcon icon={chevronForwardOutline} className="search-filter-item-chevron" />
             </IonItem>
 
-            <IonItem lines="none" className="search-filter-item unchecked-filter-item">
+            <IonItem
+              lines="none"
+              className="search-filter-item search-filter-item-button unchecked-filter-item"
+              button={true}
+              detail={false}
+              onClick={(event) => {
+                setPackFilterPopoverEvent(event.nativeEvent);
+                setDraftPackFilters(packFilters);
+                setPackFilterPopoverOpen(true);
+              }}
+            >
               <IonLabel>Pack</IonLabel>
-              <IonSelect
-                value={packFilter}
-                interface="popover"
-                onIonChange={(event) => setPackFilter(String(event.detail.value || "all"))}
-              >
-                <IonSelectOption value="all">All Packs</IonSelectOption>
-                {packOptions.map((packValue) => (
-                  <IonSelectOption key={packValue} value={packValue}>
-                    {packValue}
-                  </IonSelectOption>
-                ))}
-              </IonSelect>
+              <span className="search-filter-item-value">{selectedPackFilterText}</span>
+              <IonIcon icon={chevronForwardOutline} className="search-filter-item-chevron" />
             </IonItem>
 
             <IonButton
               fill="solid"
               className="search-filter-cancel-btn unchecked-filter-clear-btn"
-              disabled={itemFilter === "all" && packFilter === "all" && !searchText.trim()}
+              disabled={itemFilters.length === 0 && packFilters.length === 0 && !searchText.trim()}
               onClick={() => {
-                setItemFilter("all");
-                setPackFilter("all");
+                setItemFilters([]);
+                setPackFilters([]);
                 setSearchText("");
               }}
             >
@@ -359,7 +461,7 @@ export function VerifyPage() {
           </div>
 
           <div className="verify-summary-box">
-            {searchText || itemFilter !== "all" || packFilter !== "all"
+            {searchText || itemFilters.length > 0 || packFilters.length > 0
               ? `${filteredRows.length} of ${rows.length} products are unmatched`
               : `${rows.length} products are unmatched`}
           </div>
@@ -372,7 +474,7 @@ export function VerifyPage() {
             <div className="operator-required-box">{errorText}</div>
           ) : filteredRows.length === 0 ? (
             <div className="stock-empty">
-              {searchText || itemFilter !== "all" || packFilter !== "all"
+              {searchText || itemFilters.length > 0 || packFilters.length > 0
                 ? "No products found for the selected search or filters."
                 : "No unmatched products."}
             </div>
@@ -396,6 +498,34 @@ export function VerifyPage() {
           )}
         </div>
       </IonContent>
+
+      <MultiSelectFilterPopover
+        isOpen={itemFilterPopoverOpen}
+        event={itemFilterPopoverEvent}
+        draftValues={draftItemFilters}
+        options={itemFilterOptions}
+        allLabel="All Items"
+        onDraftValuesChange={setDraftItemFilters}
+        onApply={applyItemFilters}
+        onDidDismiss={() => {
+          setItemFilterPopoverOpen(false);
+          setDraftItemFilters(itemFilters);
+        }}
+      />
+
+      <MultiSelectFilterPopover
+        isOpen={packFilterPopoverOpen}
+        event={packFilterPopoverEvent}
+        draftValues={draftPackFilters}
+        options={packFilterOptions}
+        allLabel="All Packs"
+        onDraftValuesChange={setDraftPackFilters}
+        onApply={applyPackFilters}
+        onDidDismiss={() => {
+          setPackFilterPopoverOpen(false);
+          setDraftPackFilters(packFilters);
+        }}
+      />
 
       <IonModal
         isOpen={showStockModal}
