@@ -164,17 +164,21 @@ function getActivityDateKey(isoDateTime: string) {
   return String(isoDateTime || "").slice(0, 10);
 }
 
+function getStrictLocationHeaderKey(location: ShopLocation | null) {
+  return normalizeLocationKey(location?.locationName);
+}
+
 function getMasterStockBottles(product: MasterProduct, location: ShopLocation | null) {
   const safeBpc = Number(product.bpc) || 12;
-  const locationCodeKey = normalizeLocationKey(location?.locationCode);
-  const locationNameKey = normalizeLocationKey(location?.locationName);
-  const locationTypeKey = normalizeLocationKey(location?.locationType || "");
+  const locationKey = getStrictLocationHeaderKey(location);
+  if (locationKey === "shop") {
+    return parseStockStringToBottles(product.shopStock, safeBpc);
+  }
+  if (locationKey === "godown") {
+    return parseStockStringToBottles(product.godownStock, safeBpc);
+  }
   const locationStocks = product.locationStocks || {};
-  const source =
-    (locationCodeKey && locationStocks[locationCodeKey]) ||
-    (locationNameKey && locationStocks[locationNameKey]) ||
-    (locationTypeKey && locationStocks[locationTypeKey]) ||
-    product.shopStock;
+  const source = locationKey ? locationStocks[locationKey] : "";
   return parseStockStringToBottles(source, safeBpc);
 }
 
@@ -318,7 +322,7 @@ export function UncheckedPage() {
           cycleId: cycleResult.cycle.id,
           shopLocationId: currentLocationId,
         }),
-        getAllMasterProducts(10000),
+        getAllMasterProducts(10000, { includeAll: true }),
         getShopLocations(),
       ]);
 

@@ -218,26 +218,77 @@ export const createQRData = (scannedBarcodes: ScannedBarcode[]): QRData => {
   };
 };
 
-export const DEFAULT_API_BASE_URL = "http://192.168.1.170:4000/api";
+const FALLBACK_NATIVE_API_BASE_URL = "http://192.168.1.170:4000/api";
 export const STORAGE_KEY = "api_base_url";
 
-const sanitizeApiBaseUrl = (url: string): string => {
-  const trimmed = String(url || "").trim();
-  return trimmed || DEFAULT_API_BASE_URL;
+const normalizeApiBaseUrl = (url: string): string => {
+  return String(url || "").trim().replace(/\/+$/, "");
+};
+
+const getConfiguredHost = (): string => {
+  const raw = String(import.meta.env.VITE_API_BASE_URL || FALLBACK_NATIVE_API_BASE_URL).trim();
+  try {
+    return new URL(raw).hostname || "192.168.1.170";
+  } catch {
+    return "192.168.1.170";
+  }
+};
+
+const getPlatformDefaultApiBaseUrl = (): string => {
+  const configuredHost = getConfiguredHost();
+  if (Capacitor.isNativePlatform()) {
+    return `http://${configuredHost}:4000/api`;
+  }
+  return `https://${configuredHost}:4010/api`;
+};
+
+export const DEFAULT_API_BASE_URL = getPlatformDefaultApiBaseUrl();
+
+const coerceToPlatformApiBaseUrl = (url: string): string => {
+  const normalized = normalizeApiBaseUrl(url);
+  const fallback = getPlatformDefaultApiBaseUrl();
+
+  if (!normalized) {
+    return fallback;
+  }
+
+  let host = "";
+  try {
+    host = new URL(normalized).hostname;
+  } catch {
+    host = "";
+  }
+
+  const resolvedHost = host || getConfiguredHost();
+  if (!resolvedHost) {
+    return fallback;
+  }
+
+  if (Capacitor.isNativePlatform()) {
+    return `http://${resolvedHost}:4000/api`;
+  }
+
+  return `https://${resolvedHost}:4010/api`;
 };
 
 export const getApiBaseUrl = (): string => {
   const stored = localStorage.getItem(STORAGE_KEY) || "";
-  const sanitized = sanitizeApiBaseUrl(stored);
   if (!stored.trim()) {
-    localStorage.setItem(STORAGE_KEY, sanitized);
+    const defaultUrl = normalizeApiBaseUrl(DEFAULT_API_BASE_URL);
+    localStorage.setItem(STORAGE_KEY, defaultUrl);
+    return defaultUrl;
   }
-  return sanitized;
+
+  const coerced = coerceToPlatformApiBaseUrl(stored);
+  if (coerced !== normalizeApiBaseUrl(stored)) {
+    localStorage.setItem(STORAGE_KEY, coerced);
+  }
+  return coerced;
 };
 
 export const setApiBaseUrl = (url: string): void => {
-  const sanitized = sanitizeApiBaseUrl(url);
-  localStorage.setItem(STORAGE_KEY, sanitized);
+  const normalized = coerceToPlatformApiBaseUrl(url);
+  localStorage.setItem(STORAGE_KEY, normalized);
 };
 
 export const allowedFormats = ["EAN_13", "EAN_8", "CODE_128"]; // allow only product barcodes

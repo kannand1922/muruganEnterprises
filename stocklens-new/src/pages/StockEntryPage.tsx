@@ -348,18 +348,36 @@ function getActivityDateKey(isoDateTime: string) {
   return String(isoDateTime || "").slice(0, 10);
 }
 
+function getStrictLocationHeaderKey(location: ShopLocation | null) {
+  return normalizeLocationKey(location?.locationName);
+}
+
+function hasMatchingLocationStockColumn(product: MasterProduct, location: ShopLocation | null) {
+  const locationKey = getStrictLocationHeaderKey(location);
+  if (!locationKey) return false;
+  if (locationKey === "shop") return true;
+  if (locationKey === "godown") return true;
+  const locationStocks = product.locationStocks || {};
+  return Object.prototype.hasOwnProperty.call(locationStocks, locationKey);
+}
+
 function getMasterStockBottles(product: MasterProduct, location: ShopLocation | null) {
   const safeBpc = Number(product.bpc) || 12;
-  const locationCodeKey = normalizeLocationKey(location?.locationCode);
-  const locationNameKey = normalizeLocationKey(location?.locationName);
-  const locationTypeKey = normalizeLocationKey(location?.locationType || "");
+  const locationKey = getStrictLocationHeaderKey(location);
+  if (locationKey === "shop") {
+    return parseStockStringToBottles(product.shopStock, safeBpc);
+  }
+  if (locationKey === "godown") {
+    return parseStockStringToBottles(product.godownStock, safeBpc);
+  }
   const locationStocks = product.locationStocks || {};
-  const source =
-    (locationCodeKey && locationStocks[locationCodeKey]) ||
-    (locationNameKey && locationStocks[locationNameKey]) ||
-    (locationTypeKey && locationStocks[locationTypeKey]) ||
-    product.shopStock;
+  const source = locationKey ? locationStocks[locationKey] : "";
   return parseStockStringToBottles(source, safeBpc);
+}
+
+function hasPositiveStockForLocation(product: MasterProduct, location: ShopLocation | null) {
+  if (!hasMatchingLocationStockColumn(product, location)) return false;
+  return getMasterStockBottles(product, location) > 0;
 }
 
 function buildSearchResults(
@@ -595,6 +613,10 @@ export function StockEntryPage() {
     locations.find((location) => location.id === currentLocationId) || null;
   const selectedOperator =
     operators.find((operator) => operator.id === selectedOperatorId) || null;
+  const availableMasterRows = useMemo(() => {
+    if (!currentLocation) return [] as MasterProduct[];
+    return masterRows.filter((row) => hasPositiveStockForLocation(row, currentLocation));
+  }, [currentLocation, masterRows]);
 
   const todayKey = getTodayDateString();
   const isCycleActive = Boolean(activeCycleId);
@@ -602,12 +624,12 @@ export function StockEntryPage() {
 
   const masterTotalProducts = useMemo(() => {
     const codeSet = new Set<string>();
-    masterRows.forEach((row) => {
+    availableMasterRows.forEach((row) => {
       const code = normalizeCodeValue(getFieldValue(row.itemCode));
       if (code) codeSet.add(code);
     });
     return codeSet.size;
-  }, [masterRows]);
+  }, [availableMasterRows]);
 
   const cycleScanSummary = useMemo(() => {
     const latestByCode = new Map<
@@ -695,17 +717,6 @@ export function StockEntryPage() {
     const set = new Set<string>();
     if (!currentLocationId) return set;
 
-    unfinishedRows.forEach((row) => {
-      if (
-        row.shopLocationId === currentLocationId &&
-        row.isMatched &&
-        getActivityDateKey(row.activityDate) === todayKey
-      ) {
-        const code = normalizeCodeValue(getFieldValue(row.itemCode));
-        if (code) set.add(code);
-      }
-    });
-
     finishedRows.forEach((row) => {
       const hasNoDiff = Number(row.diffBottles || 0) === 0;
       if (
@@ -719,11 +730,11 @@ export function StockEntryPage() {
     });
 
     return set;
-  }, [unfinishedRows, finishedRows, currentLocationId, todayKey]);
+  }, [finishedRows, currentLocationId, todayKey]);
 
   const itemFilterOptions = useMemo(() => {
     const itemMap = new Map<string, string>();
-    masterRows.forEach((row) => {
+    availableMasterRows.forEach((row) => {
       const itemCode = normalizeCodeValue(getFieldValue(row.itemCode));
       if (itemCode && matchedCodeSetForLocation.has(itemCode)) return;
       const itemName = getFieldValue(row.itemName).trim();
@@ -734,7 +745,7 @@ export function StockEntryPage() {
       }
     });
     return Array.from(itemMap.values()).sort((a, b) => a.localeCompare(b));
-  }, [masterRows, matchedCodeSetForLocation]);
+  }, [availableMasterRows, matchedCodeSetForLocation]);
 
   const bestSellingCodeSet = useMemo(() => {
     const set = new Set<string>();
@@ -756,7 +767,7 @@ export function StockEntryPage() {
       return [] as GroupedSearchResult[];
     }
 
-    const filteredItems = masterRows.filter((row) => {
+    const filteredItems = availableMasterRows.filter((row) => {
       const code = getFieldValue(row.itemCode).toLowerCase();
       if (!code) return false;
       if (!bestSellingCodeSet.has(code)) return false;
@@ -770,17 +781,17 @@ export function StockEntryPage() {
     }));
 
     return groupSearchResults(results);
-  }, [bestSellingCodeSet, masterRows, matchedCodeSetForLocation]);
+  }, [availableMasterRows, bestSellingCodeSet, matchedCodeSetForLocation]);
 
   const unmatchedGroupedResults = useMemo(() => {
-    const filteredItems = masterRows.filter((row) => !isMatchedItemForLocation(row));
+    const filteredItems = availableMasterRows.filter((row) => !isMatchedItemForLocation(row));
     const results: SearchResult[] = filteredItems.map((row) => ({
       ...row,
       matchScore: 1,
       matchType: "partial",
     }));
     return groupSearchResults(results);
-  }, [masterRows, matchedCodeSetForLocation]);
+  }, [availableMasterRows, matchedCodeSetForLocation]);
 
   const filteredFastSellingGroupedResults = useMemo(() => {
     const trimmed = searchQuery.trim().toLowerCase();
@@ -888,7 +899,7 @@ export function StockEntryPage() {
     if (!selectedProduct) return [] as SearchResult[];
     const brand = getFieldValue(selectedProduct.brandName).toLowerCase();
     const item = getFieldValue(selectedProduct.itemName).toLowerCase();
-    const rows = masterRows
+    const rows = availableMasterRows
       .filter(
         (row) =>
           getFieldValue(row.brandName).toLowerCase() === brand &&
@@ -901,7 +912,7 @@ export function StockEntryPage() {
       }));
 
     return sortPackSizesDesc(rows);
-  }, [masterRows, selectedProduct]);
+  }, [availableMasterRows, selectedProduct]);
 
   async function loadInitialData(): Promise<{
     cycleId: number | null;
@@ -910,7 +921,7 @@ export function StockEntryPage() {
     setLoadingMaster(true);
     try {
       const [master, cycleResult, locationRows, workerRows] = await Promise.all([
-        getAllMasterProducts(10000),
+        getAllMasterProducts(10000, { includeAll: true }),
         getCurrentCycle(),
         getShopLocations(),
         getWorkers(),
@@ -1544,7 +1555,7 @@ export function StockEntryPage() {
     }
 
     const matchedProduct =
-      masterRows.find(
+      availableMasterRows.find(
         (row) => normalizeCodeValue(getFieldValue(row.itemCode)) === requestedItemCode
       ) || null;
 
@@ -1567,7 +1578,15 @@ export function StockEntryPage() {
     }
 
     openProductEditor(matchedProduct, "manual");
-  }, [history, isMasterBlocked, loadingMaster, location.pathname, location.search, masterRows, presentToast]);
+  }, [
+    availableMasterRows,
+    history,
+    isMasterBlocked,
+    loadingMaster,
+    location.pathname,
+    location.search,
+    presentToast,
+  ]);
 
   useEffect(() => {
     if (!showStockModal || !selectedProduct || !pendingAutoPrefillRef.current) {
@@ -1579,8 +1598,8 @@ export function StockEntryPage() {
   function handleDetectedCode(rawValue: string) {
     const normalized = rawValue.trim().toLowerCase();
     const matched =
-      masterRows.find((row) => getFieldValue(row.barcode).toLowerCase() === normalized) ||
-      masterRows.find((row) => getFieldValue(row.itemCode).toLowerCase() === normalized) ||
+      availableMasterRows.find((row) => getFieldValue(row.barcode).toLowerCase() === normalized) ||
+      availableMasterRows.find((row) => getFieldValue(row.itemCode).toLowerCase() === normalized) ||
       null;
 
     if (matched) {
@@ -1624,7 +1643,9 @@ export function StockEntryPage() {
     }
 
     if (resolvedMode === "barcode" && trimmed.includes(".")) {
-      const exactMatch = masterRows.find((item) => getFieldValue(item.itemCode).toLowerCase() === trimmed);
+      const exactMatch = availableMasterRows.find(
+        (item) => getFieldValue(item.itemCode).toLowerCase() === trimmed
+      );
       if (exactMatch && !isMatchedItemForLocation(exactMatch)) {
       openProductEditor(exactMatch, "manual");
         setShowSearchResults(false);
@@ -1632,7 +1653,12 @@ export function StockEntryPage() {
       }
     }
 
-    const results = buildSearchResults(trimmed, resolvedMode, masterRows, isMatchedItemForLocation);
+    const results = buildSearchResults(
+      trimmed,
+      resolvedMode,
+      availableMasterRows,
+      isMatchedItemForLocation
+    );
     const grouped = groupSearchResults(results);
     setGroupedSearchResults(grouped);
     setShowSearchResults(grouped.length > 0);

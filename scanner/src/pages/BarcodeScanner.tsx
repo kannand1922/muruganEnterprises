@@ -33,13 +33,16 @@ import {
   IonSelect,
   IonSelectOption,
 } from "@ionic/react";
-import { settingsOutline } from "ionicons/icons";
+import { closeOutline, settingsOutline } from "ionicons/icons";
 import {
   BarcodeScanner,
   BarcodesScannedEvent,
 } from "@capacitor-mlkit/barcode-scanning";
 import { Capacitor } from "@capacitor/core";
 import { App } from "@capacitor/app";
+import { Scanner as WebBarcodeScanner, type IDetectedBarcode } from "@yudiel/react-qr-scanner";
+import { prepareZXingModule } from "barcode-detector";
+import readerWasmUrl from "zxing-wasm/reader/zxing_reader.wasm?url";
 import "./BarcodeScanner.css";
 import { getAllPrinters, getBrands, getProducts } from "../api/server";
 import {
@@ -93,6 +96,88 @@ interface ManualResultGroup {
 }
 
 const LAST_BILL_STORAGE_KEY = "myapp_last_bill_number";
+const NATIVE_SCAN_FORMATS = [
+  "CODE_128",
+  "CODE_39",
+  "CODE_93",
+  "CODABAR",
+  "EAN_13",
+  "EAN_8",
+  "UPC_A",
+  "UPC_E",
+  "ITF",
+] as const;
+type SupportedWebScanFormat =
+  | "code_128"
+  | "code_39"
+  | "code_93"
+  | "codabar"
+  | "ean_13"
+  | "ean_8"
+  | "upc_a"
+  | "upc_e"
+  | "itf";
+const WEB_SCAN_FORMATS: SupportedWebScanFormat[] = [
+  "code_128",
+  "code_39",
+  "code_93",
+  "codabar",
+  "ean_13",
+  "ean_8",
+  "upc_a",
+  "upc_e",
+  "itf",
+];
+const SCAN_EVENT_DEBOUNCE_MS = 750;
+let webScannerWasmConfigured = false;
+
+function ensureWebScannerWasmConfigured() {
+  if (webScannerWasmConfigured) return;
+  webScannerWasmConfigured = true;
+
+  prepareZXingModule({
+    overrides: {
+      locateFile: (path: string, prefix: string) => {
+        if (path.endsWith(".wasm")) {
+          return readerWasmUrl;
+        }
+        return prefix + path;
+      },
+    },
+  });
+}
+
+ensureWebScannerWasmConfigured();
+
+function getWebCameraErrorMessage(error: unknown) {
+  const domError =
+    typeof DOMException !== "undefined" && error instanceof DOMException ? error : null;
+  const errorName = domError?.name || (error instanceof Error ? error.name : "");
+
+  if (!window.isSecureContext) {
+    return "Camera on phone browser needs HTTPS or localhost. Open the site in a secure URL.";
+  }
+
+  if (errorName === "NotAllowedError" || errorName === "SecurityError") {
+    return "Camera permission is blocked. In Chrome, open Site settings and allow Camera, then reload.";
+  }
+
+  if (errorName === "NotFoundError" || errorName === "DevicesNotFoundError") {
+    return "No camera was found on this device.";
+  }
+
+  if (errorName === "NotReadableError" || errorName === "TrackStartError") {
+    return "Camera is busy in another app or tab. Close other camera apps and try again.";
+  }
+
+  if (errorName === "OverconstrainedError" || errorName === "ConstraintNotSatisfiedError") {
+    return "Back camera could not be started. Try again after reloading the page.";
+  }
+
+  return error instanceof Error && error.message
+    ? error.message
+    : "Unable to start camera on this browser.";
+}
 
 const BarcodeScannerPage: React.FC = () => {
   const [scannedBarcodes, setScannedBarcodes] = useState<
@@ -853,20 +938,7 @@ const BarcodeScannerPage: React.FC = () => {
         if (event.barcodes && event.barcodes.length > 0) {
           const barcode = event.barcodes[0];
 
-          // Filter out QR codes - only process traditional barcodes
-          const allowedFormats = [
-            "CODE_128",
-            "CODE_39",
-            "CODE_93",
-            "CODABAR",
-            "EAN_13",
-            "EAN_8",
-            "UPC_A",
-            "UPC_E",
-            "ITF",
-          ];
-
-          if (!allowedFormats.includes(barcode.format)) {
+          if (!NATIVE_SCAN_FORMATS.includes(barcode.format as (typeof NATIVE_SCAN_FORMATS)[number])) {
             console.log(
               "Scan blocked: QR code or unsupported format detected:",
               barcode.format
@@ -903,7 +975,96 @@ const BarcodeScannerPage: React.FC = () => {
     await BarcodeScanner.removeAllListeners();
   };
 
+  const handleDetectedBarcode = (barcodeValue: string, format: string) => {
+    processBarcodeResult(
+      barcodeValue,
+      format,
+      brandItems,
+      scannedBarcodes,
+      quantityMode,
+      setScannedBarcodes,
+      setSelectedBarcodeId,
+      setCustomQuantity,
+      setShowQuantityPopover,
+      showToastMessage
+    );
+    startCooldownTimer();
+  };
+
+  const startWebScanning = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showToastMessage("Camera not supported in this browser", 2200);
+      return;
+    }
+
+    if (!window.isSecureContext) {
+      showToastMessage(
+        "Camera on phone browser needs HTTPS or localhost. Open the site in a secure URL.",
+        2800
+      );
+      return;
+    }
+
+    try {
+      const permissionStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: "environment" } },
+      });
+      permissionStream.getTracks().forEach((track) => track.stop());
+
+      setCanScan(true);
+      setCooldownTimeLeft(0);
+      lastScanTimeRef.current = 0;
+      processedBarcodesRef.current.clear();
+      clearAllTimeouts();
+      document.body.classList.add("barcode-scanner-active");
+      setIsScanning(true);
+    } catch (error) {
+      const message = getWebCameraErrorMessage(error);
+      setIsScanning(false);
+      document.body.classList.remove("barcode-scanner-active");
+      showToastMessage(message, 2800);
+    }
+  };
+
+  const stopWebScanning = () => {
+  };
+
+  const handleWebScannerResult = (detectedCodes: IDetectedBarcode[]) => {
+    if (Capacitor.isNativePlatform() || !isScanning || !canScan) return;
+    if (!detectedCodes || detectedCodes.length === 0) return;
+
+    const currentTime = Date.now();
+    if (currentTime - lastScanTimeRef.current < SCAN_EVENT_DEBOUNCE_MS) {
+      return;
+    }
+
+    const detected =
+      detectedCodes.find((entry) => String(entry.rawValue || "").trim()) || null;
+    if (!detected?.rawValue) {
+      return;
+    }
+
+    lastScanTimeRef.current = currentTime;
+    handleDetectedBarcode(detected.rawValue, "Web-Barcode");
+  };
+
+  const handleWebScannerError = (error: unknown) => {
+    const message = getWebCameraErrorMessage(error);
+    setCanScan(true);
+    setCooldownTimeLeft(0);
+    setIsScanning(false);
+    clearAllTimeouts();
+    document.body.classList.remove("barcode-scanner-active");
+    showToastMessage(message, 2800);
+  };
+
   const startScanning = async () => {
+    if (!Capacitor.isNativePlatform()) {
+      await startWebScanning();
+      return;
+    }
+
     const permission = await checkPermissions();
     if (!permission) {
       showToastMessage("Camera permission is required to scan barcodes");
@@ -962,6 +1123,19 @@ const BarcodeScannerPage: React.FC = () => {
   };
 
   const stopScanning = async () => {
+    stopWebScanning();
+
+    if (!Capacitor.isNativePlatform()) {
+      document.querySelector("body")?.classList.remove("barcode-scanner-active");
+      clearAllTimeouts();
+      setCanScan(true);
+      setCooldownTimeLeft(0);
+      lastScanTimeRef.current = 0;
+      processedBarcodesRef.current.clear();
+      setIsScanning(false);
+      return;
+    }
+
     try {
       await BarcodeScanner.stopScan();
       await removeBarcodeListener();
@@ -1399,6 +1573,37 @@ const BarcodeScannerPage: React.FC = () => {
       </IonHeader>
 
       <IonContent fullscreen className="scanner-content">
+        {!Capacitor.isNativePlatform() && isScanning ? (
+          <div className="web-scanner-layer">
+            <WebBarcodeScanner
+              onScan={handleWebScannerResult}
+              onError={handleWebScannerError}
+              formats={WEB_SCAN_FORMATS}
+              allowMultiple={true}
+              scanDelay={250}
+              sound={false}
+              constraints={{ facingMode: { ideal: "environment" } }}
+              components={{ finder: false, onOff: false, torch: false, zoom: false }}
+              styles={{
+                container: { width: "100%", height: "100%" },
+                video: { objectFit: "cover" },
+              }}
+              classNames={{
+                container: "web-scanner-container",
+                video: "web-scanner-video",
+              }}
+            >
+              <div className="web-scanner-frame" />
+            </WebBarcodeScanner>
+            <div className="web-scanner-toolbar">
+              <IonButton onClick={() => void stopScanning()}>
+                <IonIcon icon={closeOutline} slot="start" />
+                Close
+              </IonButton>
+            </div>
+          </div>
+        ) : null}
+
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
           <IonRefresherContent
             pullingIcon={chevronDownCircleOutline}

@@ -19,6 +19,7 @@
 .env.production.local
 /.nx
 /.nx/cache
+/certs
 /.vscode/*
 !/.vscode/extensions.json
 .idea

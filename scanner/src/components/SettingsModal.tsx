@@ -129,7 +129,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div style={{ marginTop: "16px" }}>
                   <IonInput
                     value={tempApiUrl}
-                    placeholder="Enter API base URL (e.g., http://192.168.1.170:4000/api)"
+                    placeholder={`Enter API base URL (default: ${currentApiUrl})`}
                     onIonInput={(e) => onTempApiUrlChange(e.detail.value || "")}
                     onIonChange={(e) => onTempApiUrlChange(e.detail.value || "")}
                     style={{

@@ -40,10 +40,6 @@ function formatPackBottle(totalBottles: number, bpc: number | null | undefined) 
   return `${packs}.${String(bottles).padStart(2, "0")}`;
 }
 
-function isNonZeroDiffRow(row: UnfinishedStockRow) {
-  return Number(row.diffBottles || 0) !== 0;
-}
-
 export function OperatorFinishPage() {
   const history = useHistory();
   const [presentToast] = useIonToast();
@@ -70,7 +66,7 @@ export function OperatorFinishPage() {
     shopLocationId: number
   ) {
     const rows = await getUnfinishedStockByOperator(cycleId, operatorId, shopLocationId);
-    setUnfinishedRows(rows.filter(isNonZeroDiffRow));
+    setUnfinishedRows(rows);
   }
 
   async function loadPageData() {

@@ -39,40 +39,24 @@ function migrateLegacyBaseUrl(value: string) {
   return normalized;
 }
 
-function coerceToPlatformBaseUrl(value: string) {
-  const normalized = migrateLegacyBaseUrl(value);
-  const fallbackUrl = getPlatformDefaultBaseUrl();
-
-  let host = "";
-  try {
-    host = new URL(normalized).hostname;
-  } catch {
-    host = "";
-  }
-
-  if (Capacitor.isNativePlatform()) {
-    const resolvedHost = host || getConfiguredHost();
-    return `http://${resolvedHost}:4000/new/api`;
-  }
-
-  const resolvedHost = host || getConfiguredHost();
-  return resolvedHost ? `https://${resolvedHost}:4010/new/api` : fallbackUrl;
+function sanitizeStoredBaseUrl(value: string) {
+  return migrateLegacyBaseUrl(value);
 }
 
 export function getApiBaseUrl() {
   const stored = localStorage.getItem(BACKEND_URL_STORAGE_KEY);
   if (stored && stored.trim()) {
-    const coerced = coerceToPlatformBaseUrl(stored);
-    if (coerced !== normalizeBaseUrl(stored)) {
-      localStorage.setItem(BACKEND_URL_STORAGE_KEY, coerced);
+    const normalized = sanitizeStoredBaseUrl(stored);
+    if (normalized !== normalizeBaseUrl(stored)) {
+      localStorage.setItem(BACKEND_URL_STORAGE_KEY, normalized);
     }
-    return coerced;
+    return normalized;
   }
   return normalizeBaseUrl(DEFAULT_API_BASE_URL);
 }
 
 export function setApiBaseUrl(value: string) {
-  const normalized = coerceToPlatformBaseUrl(value);
+  const normalized = sanitizeStoredBaseUrl(value);
   localStorage.setItem(BACKEND_URL_STORAGE_KEY, normalized);
   return normalized;
 }
