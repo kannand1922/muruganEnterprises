@@ -1,8 +1,14 @@
 const express = require("express");
+const fs = require("fs");
 const net = require("net");
+const path = require("path");
 const { prisma } = require("../prisma");
 const { loadMasterProducts } = require("../services/masterProducts");
-const { getDiffImageBasePath, getDiffImageFileNameExtension } = require("../services/diffImagePath");
+const {
+  getDiffImageBasePath,
+  getDiffImageFileNameExtension,
+  getDiffImageMimeTypeExtension,
+} = require("../services/diffImagePath");
 const { printerServerPort } = require("../../../../shared/config/ports");
 
 const router = express.Router();
@@ -11,6 +17,7 @@ const PRINT_SERVICE_BASE_URL = String(
 )
   .trim()
   .replace(/\/+$/, "");
+const PUBLIC_ROOT_DIR = path.resolve(__dirname, "../../../public");
 
 function parseDate(value, fallback = null) {
   if (!value) return fallback;
@@ -156,6 +163,47 @@ function buildDiffProofPath({ basePath, dateKey, batchId, cycleLabel, extension 
   const safeCycle = String(cycleLabel || "").trim() || "cycle";
   const safeExt = String(extension || "").trim();
   return `${safeBase}/${safeDate}/diff_${batchId}_cycle_${safeCycle}${safeExt}`;
+}
+
+function parseProofImagePayload(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) {
+    return { base64Data: "", mimeType: "" };
+  }
+
+  const dataUrlMatch = rawValue.match(/^data:([^;,]+);base64,(.+)$/i);
+  if (dataUrlMatch) {
+    return {
+      mimeType: String(dataUrlMatch[1] || "").trim().toLowerCase(),
+      base64Data: String(dataUrlMatch[2] || "")
+        .trim()
+        .replace(/\s+/g, ""),
+    };
+  }
+
+  return {
+    base64Data: rawValue.replace(/\s+/g, ""),
+    mimeType: "",
+  };
+}
+
+function resolvePublicAssetPath(publicAssetPath) {
+  const relativePath = String(publicAssetPath || "").trim().replace(/^\/+/, "");
+  if (!relativePath) {
+    throw new Error("Proof image path is required");
+  }
+
+  const resolvedPath = path.resolve(PUBLIC_ROOT_DIR, relativePath);
+  if (resolvedPath !== PUBLIC_ROOT_DIR && !resolvedPath.startsWith(`${PUBLIC_ROOT_DIR}${path.sep}`)) {
+    throw new Error("Invalid proof image path");
+  }
+  return resolvedPath;
+}
+
+async function saveProofImageFile(proofImagePath, base64Data) {
+  const outputPath = resolvePublicAssetPath(proofImagePath);
+  await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
+  await fs.promises.writeFile(outputPath, Buffer.from(base64Data, "base64"));
 }
 
 function formatDurationMins(startValue, endValue) {
@@ -2727,6 +2775,11 @@ router.post("/diff-batches", async (req, res) => {
   const sourceScopeRaw = String(req.body?.sourceScope || "").trim().toLowerCase();
   const proofImagePathInput = String(req.body?.proofImagePath || "").trim();
   const proofImageName = String(req.body?.proofImageName || "").trim();
+  const proofImagePayload = parseProofImagePayload(req.body?.proofImageData);
+  const proofImageData = proofImagePayload.base64Data;
+  const proofImageMimeType = String(req.body?.proofImageMimeType || proofImagePayload.mimeType || "")
+    .trim()
+    .toLowerCase();
 
   if (!cycleId) {
     return res.status(400).json({ success: false, message: "cycleId is required" });
@@ -2822,22 +2875,33 @@ router.post("/diff-batches", async (req, res) => {
       const basePath = getDiffImageBasePath();
       const dateKey = getLocalDateKeyIst();
       const cycleLabel = cycle.sno || cycle.id;
-      const extension = proofImageName ? getDiffImageFileNameExtension(proofImageName) : "";
-      const generatedPath = buildDiffProofPath({
-        basePath,
-        dateKey,
-        batchId: batch.id,
-        cycleLabel,
-        extension,
-      });
+      const extension =
+        getDiffImageFileNameExtension(proofImageName) ||
+        getDiffImageFileNameExtension(proofImagePathInput) ||
+        getDiffImageMimeTypeExtension(proofImageMimeType) ||
+        (proofImageData ? ".jpg" : "");
+      const shouldGenerateProofPath = Boolean(proofImageData || proofImagePathInput);
+      const generatedPath = shouldGenerateProofPath
+        ? buildDiffProofPath({
+            basePath,
+            dateKey,
+            batchId: batch.id,
+            cycleLabel,
+            extension,
+          })
+        : "";
       const proofImagePath = proofImagePathInput || generatedPath;
+
+      if (proofImageData && proofImagePath) {
+        await saveProofImageFile(proofImagePath, proofImageData);
+      }
 
       const updatedBatch = await tx.diffBatch.update({
         where: { id: batch.id },
         data: {
           itemCount: unmatchedRows.length,
           proofImagePath: proofImagePath || null,
-          proofImageName: proofImageName || null,
+          proofImageName: proofImageName || (proofImagePath ? path.basename(proofImagePath) : null),
         },
       });
 

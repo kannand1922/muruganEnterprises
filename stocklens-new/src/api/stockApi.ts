@@ -495,8 +495,9 @@ export async function createDiffBatch(payload: {
   sourceScope: "unfinished" | "finished";
   itemIds: number[];
   createdByWorkerId?: number | null;
-  proofImagePath?: string;
   proofImageName?: string;
+  proofImageData?: string;
+  proofImageMimeType?: string;
 }) {
   return apiPost<{
     success: boolean;

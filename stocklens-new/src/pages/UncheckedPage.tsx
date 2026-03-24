@@ -16,11 +16,13 @@ import {
 } from "@ionic/react";
 import {
   addOutline,
+  cameraOutline,
   chevronForwardOutline,
   cloudUploadOutline,
   closeOutline,
   cubeOutline,
   printOutline,
+  refreshOutline,
   removeOutline,
   wineOutline,
 } from "ionicons/icons";
@@ -50,6 +52,7 @@ import {
 import { getCurrentLocationIdFromStorage } from "../config/location";
 import { getCurrentPhoneIdFromStorage } from "../config/phone";
 import { AppTopBar } from "../components/common/AppTopBar";
+import { captureDiffProofPhoto, type DiffProofPhoto } from "../services/diffProofPhoto";
 
 const CURRENT_OPERATOR_ID_KEY = "stocklens_current_operator_id";
 const CURRENT_PRINTER_ID_KEY = "stocklens_current_printer_id";
@@ -244,8 +247,8 @@ export function UncheckedPage() {
   const [bottleQty, setBottleQty] = useState("");
   const [saving, setSaving] = useState(false);
   const [showProofModal, setShowProofModal] = useState(false);
-  const [proofPathInput, setProofPathInput] = useState("");
-  const [proofFileName, setProofFileName] = useState("");
+  const [capturingProof, setCapturingProof] = useState(false);
+  const [proofPhoto, setProofPhoto] = useState<DiffProofPhoto | null>(null);
   const [creatingDiff, setCreatingDiff] = useState(false);
   const [typeFilterPopoverOpen, setTypeFilterPopoverOpen] = useState(false);
   const [typeFilterPopoverEvent, setTypeFilterPopoverEvent] = useState<Event | undefined>(undefined);
@@ -763,8 +766,9 @@ export function UncheckedPage() {
         sourceScope: "finished",
         itemIds: Array.from(selectedMismatchIds),
         createdByWorkerId: operatorId,
-        proofImagePath: proofPathInput.trim() || undefined,
-        proofImageName: proofFileName.trim() || undefined,
+        proofImageName: proofPhoto?.fileName,
+        proofImageData: proofPhoto?.base64Data,
+        proofImageMimeType: proofPhoto?.mimeType,
       });
       const printMessage = result.print?.message ? ` ${result.print.message}` : "";
       const toastColor = result.print && !result.print.success && !result.print.skipped ? "warning" : "success";
@@ -774,8 +778,7 @@ export function UncheckedPage() {
         duration: 2200,
       });
       setShowProofModal(false);
-      setProofPathInput("");
-      setProofFileName("");
+      setProofPhoto(null);
       await loadUncheckedRows();
     } catch (error) {
       presentToast({
@@ -785,6 +788,21 @@ export function UncheckedPage() {
       });
     } finally {
       setCreatingDiff(false);
+    }
+  }
+
+  async function handleCaptureProofPhoto() {
+    setCapturingProof(true);
+    try {
+      const nextPhoto = await captureDiffProofPhoto();
+      setProofPhoto(nextPhoto);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to capture proof photo";
+      if (!/cancel/i.test(message)) {
+        presentToast({ message, color: "danger", duration: 1800 });
+      }
+    } finally {
+      setCapturingProof(false);
     }
   }
 
@@ -1129,8 +1147,7 @@ export function UncheckedPage() {
         onDidDismiss={() => {
           if (!creatingDiff) {
             setShowProofModal(false);
-            setProofPathInput("");
-            setProofFileName("");
+            setProofPhoto(null);
           }
         }}
         className="difference-proof-modal"
@@ -1144,40 +1161,49 @@ export function UncheckedPage() {
           </div>
 
           <div className="difference-proof-body">
-            <IonItem lines="none" className="difference-proof-item">
-              <IonLabel position="stacked">Select image file (optional)</IonLabel>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(event) => {
-                  const file = event.target.files?.[0] || null;
-                  setProofFileName(file?.name || "");
-                }}
-              />
-            </IonItem>
+            <IonButton
+              expand="block"
+              fill={proofPhoto ? "outline" : "solid"}
+              className="difference-proof-submit"
+              disabled={creatingDiff || capturingProof}
+              onClick={() => void handleCaptureProofPhoto()}
+            >
+              <IonIcon icon={proofPhoto ? refreshOutline : cameraOutline} slot="start" />
+              {capturingProof ? "Opening Camera..." : proofPhoto ? "Retake Proof Photo" : "Take Proof Photo"}
+            </IonButton>
 
-            <IonItem lines="none" className="difference-proof-item">
-              <IonLabel position="stacked">Proof path override (optional)</IonLabel>
-              <input
-                type="text"
-                value={proofPathInput}
-                onChange={(event) => setProofPathInput(event.target.value)}
-                placeholder="/image/diff/2026-03-16/diff_12_cycle_5.jpg"
-              />
-            </IonItem>
+            {proofPhoto ? (
+              <IonItem lines="none" className="difference-proof-item">
+                <IonLabel>
+                  <h3>{proofPhoto.fileName}</h3>
+                  <p>Captured from live camera and saved automatically to the configured diff image path.</p>
+                  <img
+                    src={proofPhoto.dataUrl}
+                    alt="Captured proof"
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      borderRadius: "12px",
+                      marginTop: "12px",
+                      objectFit: "cover",
+                    }}
+                  />
+                </IonLabel>
+              </IonItem>
+            ) : null}
 
             <IonText color="medium" className="difference-proof-note">
-              If no path is provided, the system generates one automatically.
+              No local file picker is used here. Tap the camera button to capture proof directly.
             </IonText>
 
             <IonButton
               expand="block"
               className="difference-proof-submit"
-              disabled={creatingDiff}
+              disabled={creatingDiff || capturingProof}
               onClick={() => void submitDiffBatch()}
             >
               <IonIcon icon={cloudUploadOutline} slot="start" />
-              {creatingDiff ? "Saving..." : "Save Proof & Create"}
+              {creatingDiff ? "Saving..." : proofPhoto ? "Save Proof & Create" : "Create Without Photo"}
             </IonButton>
           </div>
         </IonContent>

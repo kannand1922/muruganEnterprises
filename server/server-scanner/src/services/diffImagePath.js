@@ -32,9 +32,20 @@ function getDiffImageFileNameExtension(fileName) {
   return ext || "";
 }
 
+function getDiffImageMimeTypeExtension(mimeType) {
+  const normalized = String(mimeType || "").trim().toLowerCase();
+  if (normalized === "image/png") return ".png";
+  if (normalized === "image/webp") return ".webp";
+  if (normalized === "image/heic") return ".heic";
+  if (normalized === "image/heif") return ".heif";
+  if (normalized.startsWith("image/")) return ".jpg";
+  return "";
+}
+
 module.exports = {
   DEFAULT_DIFF_IMAGE_PATH,
   DIFF_IMAGE_PATH_FILE,
   getDiffImageBasePath,
   getDiffImageFileNameExtension,
+  getDiffImageMimeTypeExtension,
 };
