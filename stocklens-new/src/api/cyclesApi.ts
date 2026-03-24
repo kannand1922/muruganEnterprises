@@ -1,15 +1,17 @@
 import { apiGet, apiPost } from "./httpClient";
 
+export type CycleSummary = {
+  id: number;
+  sno?: number | null;
+  startDate: string;
+  endDate?: string | null;
+  status: "active" | "inactive";
+};
+
 type CurrentCycleEnvelope = {
   success: boolean;
   active: boolean;
-  cycle: {
-    id: number;
-    sno?: number | null;
-    startDate: string;
-    endDate?: string | null;
-    status: "active" | "inactive";
-  } | null;
+  cycle: CycleSummary | null;
 };
 
 export async function getCurrentCycle() {
@@ -48,6 +50,15 @@ export async function getActiveCycleSummary() {
       unmatchedFinishedCount: number;
     };
   }>("/cycles/active-summary");
+}
+
+export async function getAllCycles() {
+  const result = await apiGet<{
+    success: boolean;
+    count: number;
+    cycles: CycleSummary[];
+  }>("/cycles/all");
+  return result.cycles;
 }
 
 export async function stopCycle(cycleId?: number, endDate?: string) {

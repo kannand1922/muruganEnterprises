@@ -15,6 +15,7 @@ import {
   peopleOutline,
   phonePortraitOutline,
   printOutline,
+  layersOutline,
   settingsOutline,
   swapHorizontalOutline,
   starOutline,
@@ -69,6 +70,12 @@ const settingItems = [
     subtitle: "Review and manage diff batches",
     icon: swapHorizontalOutline,
     path: "/settings/difference",
+  },
+  {
+    title: "DB Viewer",
+    subtitle: "Inspect stock tables cycle-wise with filters and row clearing",
+    icon: layersOutline,
+    path: "/settings/db-viewer",
   },
   {
     title: "Common Configuration",

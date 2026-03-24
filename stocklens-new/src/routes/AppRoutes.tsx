@@ -26,6 +26,7 @@ import { SettingsNotificationConfigPage } from "../pages/SettingsNotificationCon
 import { SettingsLowStockNotificationsPage } from "../pages/SettingsLowStockNotificationsPage";
 import { SettingsLowStockThresholdsPage } from "../pages/SettingsLowStockThresholdsPage";
 import { SettingsDifferencePage } from "../pages/SettingsDifferencePage";
+import { SettingsDbViewerPage } from "../pages/SettingsDbViewerPage";
 import { StockLowStockPage } from "../pages/StockLowStockPage";
 import { SettingsUnlockPage } from "../pages/SettingsUnlockPage";
 import { SettingsProtectedRoute } from "./SettingsProtectedRoute";
@@ -61,6 +62,7 @@ export function AppRoutes() {
         <SettingsProtectedRoute exact path="/settings/best-selling" component={SettingsBestSellingPage} />
         <SettingsProtectedRoute exact path="/settings/printers" component={SettingsPrintersPage} />
         <SettingsProtectedRoute exact path="/settings/difference" component={SettingsDifferencePage} />
+        <SettingsProtectedRoute exact path="/settings/db-viewer" component={SettingsDbViewerPage} />
         <SettingsProtectedRoute
           exact
           path="/settings/low-stock-alerts/config"

@@ -1,6 +1,6 @@
 export const SETTINGS_UNLOCKED_AT_KEY = "stocklens_settings_unlocked_at";
 export const SETTINGS_UNLOCK_TTL_MS = 30 * 60 * 1000;
-export const SETTINGS_SAFETY_PASSWORD = "super@admin";
+export const SETTINGS_SAFETY_PASSWORD = "password@123";
 
 export function grantSettingsAccess() {
   sessionStorage.setItem(SETTINGS_UNLOCKED_AT_KEY, String(Date.now()));

@@ -1,7 +1,7 @@
 const fs = require("fs");
 const { stockLensScannerConfigPaths } = require("../../../../shared/config/paths");
 
-const SAFETY_PASSWORD = "super@admin";
+const SAFETY_PASSWORD = "password@123";
 const SETTINGS_PASSWORD_FILE = stockLensScannerConfigPaths.settingsPasswordFile;
 
 function readPasswordFromFile(filePath) {

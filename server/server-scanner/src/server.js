@@ -9,6 +9,7 @@ const cyclesRouter = require("./routes/cycles");
 const stockRouter = require("./routes/stock");
 const metaRouter = require("./routes/meta");
 const desktopRouter = require("./routes/desktop");
+const dbViewerRouter = require("./routes/dbViewer");
 const myAppCommonRouter = require("./routes/myAppCommon");
 const { startLowStockMonitor, stopLowStockMonitor } = require("./services/lowStockMonitor");
 const {
@@ -56,6 +57,7 @@ app.use("/api", myAppCommonRouter);
 app.use("/api/cycles", cyclesRouter);
 app.use("/api/stock", stockRouter);
 app.use("/api/meta", metaRouter);
+app.use("/api/db-viewer", dbViewerRouter);
 app.use("/desktop", desktopRouter);
 
 app.use((error, req, res, next) => {
