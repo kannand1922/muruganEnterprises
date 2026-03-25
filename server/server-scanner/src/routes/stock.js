@@ -1624,7 +1624,7 @@ function generateDifferenceReportHTML(data) {
   const scopeInfo =
     scope === "total"
       ? `All cycle items (${cycleDate})`
-      : `Only scanned today (${todayDate})`;
+      : `Only today's diff items (${todayDate})`;
 
   const renderSection = (section) => {
     const items = Array.isArray(section?.rows) ? section.rows : [];
@@ -1650,7 +1650,7 @@ function generateDifferenceReportHTML(data) {
         <thead>
           <tr>
             <th style="width: 72%;">Name</th>
-            <th style="width: 28%;">Scanned</th>
+            <th style="width: 28%;">Diff</th>
           </tr>
         </thead>
         <tbody>
@@ -1659,7 +1659,7 @@ function generateDifferenceReportHTML(data) {
               (item) => `
             <tr>
               <td>${item.name}</td>
-              <td>${item.scanned}</td>
+              <td>${item.diffLabel ?? (item.diff > 0 ? `+${item.diff}` : item.diff ?? 0)}</td>
             </tr>
           `
             )
