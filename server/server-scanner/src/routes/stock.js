@@ -3363,8 +3363,8 @@ router.post("/unfinished/upsert", async (req, res) => {
   }
 
   const qty = Number(quantityBottles || 0);
-  const current = Number(currentStockBottles || 0);
-  if (!Number.isFinite(qty) || !Number.isFinite(current)) {
+  const requestedCurrent = Number(currentStockBottles || 0);
+  if (!Number.isFinite(qty) || !Number.isFinite(requestedCurrent)) {
     return res.status(400).json({ success: false, message: "Invalid quantity/current values" });
   }
 
@@ -3383,6 +3383,18 @@ router.post("/unfinished/upsert", async (req, res) => {
     }
   }
 
+  const location = await prisma.shopLocation.findUnique({ where: { id: Number(shopLocationId) } });
+  if (!location) {
+    return res.status(404).json({ success: false, message: "Shop location not found" });
+  }
+
+  const normalizedItemCode = normalizeItemCode(itemCode);
+  const masterProduct =
+    masterRows.find((row) => normalizeItemCode(row.itemCode) === normalizedItemCode) || null;
+  const current =
+    masterProduct && hasMatchingLocationStockColumn(masterProduct, location)
+      ? getMasterStockBottles(masterProduct, location)
+      : requestedCurrent;
   const diff = qty - current;
   const matched = diff === 0;
 
