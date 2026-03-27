@@ -957,12 +957,6 @@ export function UncheckedPage() {
                     <div className="verify-row-meta">
                       {row.packValue || "-"} • {row.itemName || "-"} • Code: {row.itemCode}
                     </div>
-                    {row.rowType === "mismatched" ? (
-                      <div className="verify-row-meta">
-                        Entered: {row.enteredFormatted || "-"} • Current: {row.currentStockFormatted || "-"} • Diff:{" "}
-                        {row.diffFormatted || "-"}
-                      </div>
-                    ) : null}
                   </div>
                 </div>
               ))}
