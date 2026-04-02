@@ -46,6 +46,129 @@ let isShuttingDown = false;
 const REQUIRED_BUILD_FILE = path.resolve(stockLensScannerConfigPaths.requiredBuildFile);
 const DEFAULT_HTTPS_PORT = Number(process.env.PRINTER_SERVER_HTTPS_PORT || 4010);
 
+const renderServerLauncherPage = () => `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StockLens Server</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Arial, sans-serif;
+        background: #f5f7fb;
+        color: #14213d;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background:
+          radial-gradient(circle at top, rgba(81, 125, 255, 0.18), transparent 40%),
+          linear-gradient(180deg, #f8fbff 0%, #eef3fb 100%);
+      }
+
+      main {
+        width: min(100%, 520px);
+        padding: 32px;
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 18px 50px rgba(20, 33, 61, 0.12);
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: 1.75rem;
+      }
+
+      p {
+        margin: 0 0 24px;
+        color: #42526b;
+        line-height: 1.5;
+      }
+
+      .actions {
+        display: grid;
+        gap: 14px;
+      }
+
+      button {
+        width: 100%;
+        border: 0;
+        border-radius: 14px;
+        padding: 16px 18px;
+        font: inherit;
+        font-weight: 700;
+        color: #fff;
+        cursor: pointer;
+      }
+
+      button[data-target="app"] {
+        background: linear-gradient(135deg, #f97316, #ea580c);
+      }
+
+      button[data-target="stocklens"] {
+        background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      }
+
+      .meta {
+        margin-top: 20px;
+        font-size: 0.95rem;
+        color: #5b6b84;
+      }
+
+      code {
+        font-family: "SFMono-Regular", Consolas, monospace;
+        background: #edf2ff;
+        color: #1e3a8a;
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Server Ready</h1>
+      <p>
+        HTTPS is working. Use the buttons below to open this server on the required
+        ports.
+      </p>
+
+      <div class="actions">
+        <button type="button" data-target="app">Stock · HTTPS port 4100</button>
+        <button type="button" data-target="stocklens">Scanner · HTTPS port 4200</button>
+      </div>
+
+      <div class="meta">
+        Current host: <code id="current-host">loading...</code>
+      </div>
+    </main>
+
+    <script>
+      const host = window.location.hostname || "localhost";
+      document.getElementById("current-host").textContent = host;
+
+      const targets = {
+        app: "https://" + host + ":4100/",
+        stocklens: "https://" + host + ":4200/",
+      };
+
+      document.querySelectorAll("button[data-target]").forEach((button) => {
+        button.addEventListener("click", () => {
+          window.open(targets[button.dataset.target], "_blank", "noopener,noreferrer");
+        });
+      });
+    </script>
+  </body>
+</html>`;
+
 const getLocalIpAltNames = () => {
   const interfaces = os.networkInterfaces();
   const altNames = [];
@@ -193,6 +316,10 @@ const readRequiredBuildNumber = () => {
 
 registerPrinterRoutes(app);
 app.use("/api", myAppCommonRouter);
+
+app.get("/", (req, res) => {
+  res.type("html").send(renderServerLauncherPage());
+});
 
 app.get("/new/health", async (req, res) => {
   try {

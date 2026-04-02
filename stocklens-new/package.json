@@ -7,7 +7,9 @@
     "dev": "node scripts/dev-dual.mjs",
     "dev:http": "vite",
     "dev:https": "vite --mode https",
-    "build": "tsc && vite build",
+    "build": "rm -rf dist && tsc && vite build",
+    "android:sync": "npm run build && npx cap sync android",
+    "android:open": "npx cap open android",
     "preview": "vite preview",
     "lint": "eslint src --ext .ts,.tsx"
   },

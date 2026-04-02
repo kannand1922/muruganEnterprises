@@ -1758,6 +1758,24 @@ body.barcode-scanner-active .ion-content {
 }
 
 /* Difference page */
+.difference-content {
+  --padding-bottom: calc(16px + env(safe-area-inset-bottom));
+}
+
+.difference-layout-card {
+  min-height: calc(100dvh - 132px);
+}
+
+.difference-layout-content {
+  min-height: 100%;
+}
+
+.difference-result-list {
+  min-height: clamp(420px, 68dvh, 960px);
+  max-height: none;
+  overflow: visible;
+}
+
 .difference-create-btn {
   --border-radius: 8px;
   --background: #0ea5e9;
@@ -1777,6 +1795,28 @@ body.barcode-scanner-active .ion-content {
   font-size: 11px;
   font-weight: 600;
   text-transform: none;
+}
+
+@media (max-width: 520px) {
+  .difference-layout-card {
+    min-height: calc(100dvh - 116px);
+  }
+
+  .finish-summary-top {
+    align-items: stretch;
+  }
+
+  .difference-create-btn {
+    align-self: flex-start;
+  }
+
+  .finish-summary-meta-row {
+    flex-wrap: wrap;
+  }
+
+  .difference-result-list {
+    min-height: clamp(520px, 74dvh, 1100px);
+  }
 }
 
 .difference-proof-modal .modal-wrapper {

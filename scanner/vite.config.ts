@@ -33,10 +33,10 @@ export default defineConfig(({ mode }) => {
     plugins,
     server: {
       host: true,
-      port: 5173,
+      port: 4200,
       strictPort: true,
       https: httpsConfig,
-      hmr: useHttps ? { protocol: "wss", clientPort: 5173 } : undefined,
+      hmr: useHttps ? { protocol: "wss", clientPort: 4200 } : undefined,
     },
     test: {
       globals: true,

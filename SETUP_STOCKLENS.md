@@ -256,8 +256,7 @@ cd /Users/apple/Documents/project/stocklens-new
 npm install -D @capacitor/cli @capacitor/android
 npm install
 
-npm run build
+npm run android:sync
 # Run this only the first time, when `android/` does not exist yet:
 # npx cap add android
-npx cap sync android
-npx cap open android
+npm run android:open

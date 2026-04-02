@@ -220,8 +220,8 @@ export function DifferencePage() {
     <IonPage>
       <AppTopBar title="Difference" showBack backPath="/stock" />
       <IonContent fullscreen className="main-page-content ion-padding stock-entry-content difference-content">
-        <IonCard className="control-card">
-          <IonCardContent className="control-content">
+        <IonCard className="control-card difference-layout-card">
+          <IonCardContent className="control-content difference-layout-content">
             <div className="finish-summary-top">
               <div className="finish-summary-head">
                 <div className="finish-operator-name">
@@ -271,7 +271,7 @@ export function DifferencePage() {
             ) : rows.length === 0 ? (
               <div className="stock-empty">No mismatched finished items for this location.</div>
             ) : (
-              <div className="search-results-container finish-result-list">
+              <div className="search-results-container finish-result-list difference-result-list">
                 {rows.map((row) => {
                   return (
                     <IonItem key={row.id} lines="none" className="search-result-items finish-result-item">
