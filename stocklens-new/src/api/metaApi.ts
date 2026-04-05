@@ -14,6 +14,12 @@ export type ShopInfo = {
   active?: boolean;
 };
 
+export type CatalogSyncSettings = {
+  centralBaseUrl: string | null;
+  syncOperatorsWithCentral: boolean;
+  syncBestSellingWithCentral: boolean;
+};
+
 export type ShopLocation = {
   id: number;
   locationCode: string;
@@ -27,8 +33,93 @@ export type ShopLocation = {
 export type Worker = {
   id: number;
   name: string;
+  fatherName?: string | null;
+  designationId?: number | null;
+  designationName?: string | null;
+  dateOfBirth?: string | null;
+  dateOfJoining?: string | null;
+  dateOfResignation?: string | null;
+  permanentAddress?: string | null;
+  temporaryAddress?: string | null;
+  aadhaarNumber?: string | null;
+  email?: string | null;
+  bankAccountNumber?: string | null;
+  ifscCode?: string | null;
+  recommendedBy?: string | null;
+  workLocationId?: number | null;
+  workLocationName?: string | null;
+  profileImageBase64?: string | null;
+  profileImageMimeType?: string | null;
+  profileImageFileName?: string | null;
+  resumeFileBase64?: string | null;
+  resumeFileMimeType?: string | null;
+  resumeFileName?: string | null;
+  aadhaarImageBase64?: string | null;
+  aadhaarImageMimeType?: string | null;
+  aadhaarImageFileName?: string | null;
   phone?: string | null;
+  phoneNumbers?: Array<{
+    id?: number;
+    label?: string | null;
+    phoneNumber: string;
+    isPrimary: boolean;
+  }>;
+  documents?: Array<{
+    id?: number;
+    category: string;
+    label?: string | null;
+    textValue?: string | null;
+    fileName?: string | null;
+    mimeType?: string | null;
+    fileDataBase64?: string | null;
+    sortOrder?: number;
+    active?: boolean;
+  }>;
   active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type WorkerPayload = {
+  name: string;
+  fatherName: string;
+  designationName: string;
+  dateOfBirth: string;
+  dateOfJoining: string;
+  dateOfResignation?: string | null;
+  permanentAddress: string;
+  temporaryAddress?: string | null;
+  aadhaarNumber: string;
+  email?: string | null;
+  bankAccountNumber: string;
+  ifscCode: string;
+  recommendedBy: string;
+  workLocationName?: string | null;
+  profileImageBase64: string;
+  profileImageMimeType?: string | null;
+  profileImageFileName?: string | null;
+  resumeFileBase64: string;
+  resumeFileMimeType?: string | null;
+  resumeFileName?: string | null;
+  aadhaarImageBase64: string;
+  aadhaarImageMimeType?: string | null;
+  aadhaarImageFileName?: string | null;
+  phoneNumbers: Array<{
+    label?: string | null;
+    phoneNumber: string;
+    isPrimary: boolean;
+  }>;
+  documents?: Array<{
+    category: string;
+    label?: string | null;
+    textValue?: string | null;
+    fileName?: string | null;
+    mimeType?: string | null;
+    fileDataBase64?: string | null;
+    sortOrder?: number;
+    active?: boolean;
+  }>;
+  active?: boolean;
 };
 
 export type Printer = {
@@ -214,8 +305,11 @@ export type MasterStatus = {
   recent: boolean;
   lastModified: string;
   lastModifiedIST: string;
+  checkedAt?: string;
+  checkedAtIST?: string;
   ageMs: number;
   ageMinutes: number;
+  ageLabel?: string;
   maxAgeMinutes: number;
   sourceFile: string;
   message?: string;
@@ -244,6 +338,16 @@ type ApiListEnvelope<T> = {
 
 export async function getShopInfo() {
   const result = await apiGet<ApiEnvelope<ShopInfo | null>>("/meta/shop");
+  return result.data;
+}
+
+export async function getCatalogSyncSettings() {
+  const result = await apiGet<ApiEnvelope<CatalogSyncSettings>>("/meta/sync-settings");
+  return result.data;
+}
+
+export async function updateCatalogSyncSettings(payload: CatalogSyncSettings) {
+  const result = await apiPut<ApiEnvelope<CatalogSyncSettings>>("/meta/sync-settings", payload);
   return result.data;
 }
 
@@ -297,14 +401,14 @@ export async function getWorkers() {
   return result.rows;
 }
 
-export async function createWorker(payload: { name: string; phone?: string; active?: boolean }) {
+export async function createWorker(payload: WorkerPayload) {
   const result = await apiPost<ApiEnvelope<Worker>>("/meta/workers", payload);
   return result.data;
 }
 
 export async function updateWorker(
   id: number,
-  payload: { name: string; phone?: string; active?: boolean }
+  payload: WorkerPayload
 ) {
   const result = await apiPut<ApiEnvelope<Worker>>(`/meta/workers/${id}`, payload);
   return result.data;

@@ -10,10 +10,16 @@ import {
   IonLabel,
   IonNote,
   IonPage,
+  IonToggle,
   useIonToast,
 } from "@ionic/react";
 import { useEffect, useState } from "react";
 import { AppTopBar } from "../components/common/AppTopBar";
+import {
+  getCatalogSyncSettings,
+  updateCatalogSyncSettings,
+  type CatalogSyncSettings,
+} from "../api/metaApi";
 import {
   DEFAULT_API_BASE_URL,
   getApiBaseUrl,
@@ -27,6 +33,16 @@ export function SettingsCommonConfigPage() {
   const [connectionStatus, setConnectionStatus] = useState<
     "idle" | "checking" | "connected" | "disconnected"
   >("idle");
+  const [syncSettings, setSyncSettings] = useState<CatalogSyncSettings>({
+    centralBaseUrl: "",
+    syncOperatorsWithCentral: true,
+    syncBestSellingWithCentral: true,
+  });
+  const [savedSyncSettings, setSavedSyncSettings] = useState<CatalogSyncSettings>({
+    centralBaseUrl: "",
+    syncOperatorsWithCentral: true,
+    syncBestSellingWithCentral: true,
+  });
 
   function reloadCurrentValues() {
     const backend = getApiBaseUrl();
@@ -36,7 +52,22 @@ export function SettingsCommonConfigPage() {
 
   useEffect(() => {
     reloadCurrentValues();
+    void loadSyncSettings();
   }, []);
+
+  async function loadSyncSettings() {
+    try {
+      const data = await getCatalogSyncSettings();
+      const normalized = {
+        ...data,
+        centralBaseUrl: data.centralBaseUrl || "",
+      };
+      setSyncSettings(normalized);
+      setSavedSyncSettings(normalized);
+    } catch (error) {
+      presentToast({ message: "Failed to load sync settings", color: "danger", duration: 1800 });
+    }
+  }
 
   function toHealthUrl(baseUrl: string) {
     const normalized = baseUrl.trim().replace(/\/+$/, "");
@@ -89,7 +120,31 @@ export function SettingsCommonConfigPage() {
     void checkConnection(backend);
   }
 
+  async function onSaveSyncSettings() {
+    try {
+      const data = await updateCatalogSyncSettings(syncSettings);
+      const normalized = {
+        ...data,
+        centralBaseUrl: data.centralBaseUrl || "",
+      };
+      setSyncSettings(normalized);
+      setSavedSyncSettings(normalized);
+      presentToast({ message: "Sync settings saved", color: "success", duration: 1400 });
+    } catch (error) {
+      presentToast({
+        message: error instanceof Error ? error.message : "Failed to save sync settings",
+        color: "danger",
+        duration: 1800,
+      });
+    }
+  }
+
   const isDirty = backendUrlInput.trim().replace(/\/+$/, "") !== currentBackendUrl;
+  const isSyncDirty =
+    (syncSettings.centralBaseUrl || "").trim().replace(/\/+$/, "") !==
+      (savedSyncSettings.centralBaseUrl || "").trim().replace(/\/+$/, "") ||
+    syncSettings.syncOperatorsWithCentral !== savedSyncSettings.syncOperatorsWithCentral ||
+    syncSettings.syncBestSellingWithCentral !== savedSyncSettings.syncBestSellingWithCentral;
 
   const badgeText =
     connectionStatus === "checking"
@@ -163,6 +218,65 @@ export function SettingsCommonConfigPage() {
               <div className="settings-actions">
                 <IonButton expand="block" onClick={onSave}>
                   Edit Save
+                </IonButton>
+              </div>
+            ) : null}
+          </IonCardContent>
+        </IonCard>
+
+        <IonCard className="settings-config-card">
+          <IonCardHeader>
+            <IonCardTitle>Central Sync</IonCardTitle>
+          </IonCardHeader>
+          <IonCardContent>
+            <IonItem>
+              <IonLabel position="stacked">Central Server URL</IonLabel>
+              <IonInput
+                value={syncSettings.centralBaseUrl}
+                onIonInput={(e) =>
+                  setSyncSettings((current) => ({
+                    ...current,
+                    centralBaseUrl: e.detail.value || "",
+                  }))
+                }
+                placeholder="http://192.168.1.10:3010"
+              />
+            </IonItem>
+            <IonNote color="medium">
+              When enabled, operator and best selling changes are sent to central first, then central pushes back to
+              all shops.
+            </IonNote>
+
+            <IonItem>
+              <IonLabel>Sync operators with central</IonLabel>
+              <IonToggle
+                checked={syncSettings.syncOperatorsWithCentral}
+                onIonChange={(e) =>
+                  setSyncSettings((current) => ({
+                    ...current,
+                    syncOperatorsWithCentral: e.detail.checked,
+                  }))
+                }
+              />
+            </IonItem>
+
+            <IonItem>
+              <IonLabel>Sync best selling with central</IonLabel>
+              <IonToggle
+                checked={syncSettings.syncBestSellingWithCentral}
+                onIonChange={(e) =>
+                  setSyncSettings((current) => ({
+                    ...current,
+                    syncBestSellingWithCentral: e.detail.checked,
+                  }))
+                }
+              />
+            </IonItem>
+
+            {isSyncDirty ? (
+              <div className="settings-actions">
+                <IonButton expand="block" onClick={() => void onSaveSyncSettings()}>
+                  Save Sync Settings
                 </IonButton>
               </div>
             ) : null}

@@ -1,0 +1,136 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../generated/central-client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:../../../shared/data/stock/central_master.sqlite"
+}
+
+model Operator {
+  id                    Int      @id @default(autoincrement())
+  name                  String   @unique
+  fatherName            String?  @map("father_name")
+  designationId         Int?     @map("designation_id")
+  dateOfBirth           DateTime? @map("date_of_birth")
+  dateOfJoining         DateTime? @map("date_of_joining")
+  dateOfResignation     DateTime? @map("date_of_resignation")
+  permanentAddress      String?  @map("permanent_address")
+  temporaryAddress      String?  @map("temporary_address")
+  aadhaarNumber         String?  @map("aadhaar_number")
+  email                 String?
+  bankAccountNumber     String?  @map("bank_account_number")
+  ifscCode              String?  @map("ifsc_code")
+  recommendedBy         String   @default("Direct") @map("recommended_by")
+  workLocationId        Int?     @map("work_location_id")
+  profileImageBase64    String?  @map("profile_image_base64")
+  profileImageMimeType  String?  @map("profile_image_mime_type")
+  profileImageFileName  String?  @map("profile_image_file_name")
+  resumeFileBase64      String?  @map("resume_file_base64")
+  resumeFileMimeType    String?  @map("resume_file_mime_type")
+  resumeFileName        String?  @map("resume_file_name")
+  aadhaarImageBase64    String?  @map("aadhaar_image_base64")
+  aadhaarImageMimeType  String?  @map("aadhaar_image_mime_type")
+  aadhaarImageFileName  String?  @map("aadhaar_image_file_name")
+  phone                 String?
+  active                Boolean  @default(true)
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  designation  OperatorDesignation?  @relation(fields: [designationId], references: [id], onDelete: SetNull)
+  workLocation OperatorWorkLocation? @relation(fields: [workLocationId], references: [id], onDelete: SetNull)
+  phoneNumbers OperatorPhoneNumber[]
+  documents    OperatorDocument[]
+
+  @@index([designationId], map: "idx_operators_designation_id")
+  @@index([workLocationId], map: "idx_operators_work_location_id")
+  @@index([active], map: "idx_operators_active")
+
+  @@map("operators")
+}
+
+model OperatorDesignation {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  operators Operator[]
+
+  @@map("operator_designations")
+}
+
+model OperatorWorkLocation {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  operators Operator[]
+
+  @@map("operator_work_locations")
+}
+
+model OperatorPhoneNumber {
+  id          Int      @id @default(autoincrement())
+  operatorId  Int      @map("operator_id")
+  label       String?
+  phoneNumber String   @map("phone_number")
+  isPrimary   Boolean  @default(false) @map("is_primary")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  operator Operator @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+
+  @@index([operatorId], map: "idx_operator_phone_numbers_operator_id")
+  @@index([operatorId, isPrimary], map: "idx_operator_phone_numbers_primary")
+  @@map("operator_phone_numbers")
+}
+
+model OperatorDocument {
+  id             Int      @id @default(autoincrement())
+  operatorId     Int      @map("operator_id")
+  category       String
+  label          String?
+  textValue      String?  @map("text_value")
+  fileName       String?  @map("file_name")
+  mimeType       String?  @map("mime_type")
+  fileDataBase64 String?  @map("file_data_base64")
+  sortOrder      Int      @default(0) @map("sort_order")
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  operator Operator @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+
+  @@index([operatorId], map: "idx_operator_documents_operator_id")
+  @@index([operatorId, category], map: "idx_operator_documents_category")
+  @@map("operator_documents")
+}
+
+model BestSeller {
+  id        Int      @id @default(autoincrement())
+  itemCode  String   @unique @map("item_code")
+  itemName  String?  @map("item_name")
+  brandName String?  @map("brand_name")
+  packValue String?  @map("pack_value")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("best_sellers")
+}
+
+model ShopEndpoint {
+  id        Int      @id @default(autoincrement())
+  shopName  String   @unique @map("shop_name")
+  baseUrl   String   @unique @map("base_url")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("shop_endpoints")
+}

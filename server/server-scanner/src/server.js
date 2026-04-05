@@ -3,6 +3,7 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const { prisma } = require("./prisma");
+const { centralPrisma } = require("./centralPrisma");
 const { stockLensScannerConfigPaths } = require("../../../shared/config/paths");
 
 const cyclesRouter = require("./routes/cycles");
@@ -12,6 +13,10 @@ const desktopRouter = require("./routes/desktop");
 const dbViewerRouter = require("./routes/dbViewer");
 const myAppCommonRouter = require("./routes/myAppCommon");
 const { startLowStockMonitor, stopLowStockMonitor } = require("./services/lowStockMonitor");
+const {
+  startCentralCatalogSync,
+  stopCentralCatalogSync,
+} = require("./services/centralCatalogSync");
 const {
   startUnfinishedAutoFinishService,
   stopUnfinishedAutoFinishService,
@@ -41,10 +46,23 @@ function readRequiredBuild() {
 
 app.get("/health", async (req, res) => {
   try {
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({ ok: true, db: "connected" });
+    await Promise.all([prisma.$queryRaw`SELECT 1`, centralPrisma.$queryRaw`SELECT 1`]);
+    res.json({
+      ok: true,
+      db: {
+        stock: "connected",
+        central: "connected",
+      },
+    });
   } catch (error) {
-    res.status(500).json({ ok: false, db: "error", error: error.message });
+    res.status(500).json({
+      ok: false,
+      db: {
+        stock: "error",
+        central: "error",
+      },
+      error: error.message,
+    });
   }
 });
 
@@ -68,6 +86,7 @@ app.use((error, req, res, next) => {
 server = app.listen(port, () => {
   console.log(`Prisma server listening on http://localhost:${port}`);
   void startLowStockMonitor();
+  void startCentralCatalogSync();
   void startUnfinishedAutoFinishService();
 });
 
@@ -78,10 +97,11 @@ const shutdown = async (reason = "shutdown", exitCode = 0) => {
   isShuttingDown = true;
   console.error(`Shutting down scanner server (${reason})...`);
   stopLowStockMonitor();
+  stopCentralCatalogSync();
   stopUnfinishedAutoFinishService();
   if (server) {
     server.close(async () => {
-      await prisma.$disconnect();
+      await Promise.all([prisma.$disconnect(), centralPrisma.$disconnect()]);
       process.exit(exitCode);
     });
     setTimeout(() => {
@@ -89,7 +109,7 @@ const shutdown = async (reason = "shutdown", exitCode = 0) => {
     }, 10_000).unref();
     return;
   }
-  await prisma.$disconnect();
+  await Promise.all([prisma.$disconnect(), centralPrisma.$disconnect()]);
   process.exit(exitCode);
 };
 

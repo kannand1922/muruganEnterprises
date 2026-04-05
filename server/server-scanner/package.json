@@ -4,11 +4,15 @@
   "private": true,
   "main": "src/server.js",
   "scripts": {
+    "predev": "npm run prisma:generate:central",
     "dev": "nodemon src/server.js",
+    "prestart": "npm run prisma:generate:central",
     "start": "node src/server.js",
     "prisma:generate": "prisma generate",
+    "prisma:generate:central": "prisma generate --schema prisma/central/schema.prisma",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:deploy": "prisma migrate deploy"
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:dbpush:central": "prisma db push --schema prisma/central/schema.prisma"
   },
   "dependencies": {
     "@prisma/client": "^6.16.1",

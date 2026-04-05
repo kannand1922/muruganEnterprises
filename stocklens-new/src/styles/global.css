@@ -158,3 +158,222 @@ ion-button[color="medium"] {
   --background: var(--color-bg-subtle);
   --color: var(--color-text-secondary);
 }
+
+.operator-profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.operator-form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.operator-form-section:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.operator-upload-card,
+.operator-repeatable-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-subtle);
+}
+
+.operator-upload-actions,
+.operator-inline-actions,
+.operator-repeatable-header,
+.operator-list-avatar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.operator-repeatable-header {
+  justify-content: space-between;
+}
+
+.operator-upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: var(--color-accent);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.operator-upload-button-secondary {
+  background: #fff;
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+}
+
+.operator-image-preview,
+.operator-avatar-preview {
+  width: 96px;
+  height: 96px;
+  border-radius: 14px;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+}
+
+.operator-avatar-preview,
+.operator-avatar-fallback {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+}
+
+.operator-avatar-fallback {
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  background: var(--color-accent-light);
+  border: 1px solid var(--color-border);
+}
+
+.operator-divider {
+  height: 1px;
+  background: var(--color-border);
+}
+
+.operator-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.operator-list-item {
+  --inner-padding-start: 0;
+  --inner-padding-end: 0;
+  --padding-start: 0;
+  --padding-end: 0;
+}
+
+.operator-list-item::part(native) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+}
+
+.operator-list-name {
+  margin: 0;
+  min-width: 0;
+}
+
+.operator-list-name h2,
+.operator-list-name p {
+  margin: 0;
+}
+
+.operator-list-name h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.operator-list-actions {
+  margin-left: auto;
+  flex: 0 0 auto;
+  align-items: center;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.operator-list-actions ion-button {
+  min-width: 34px;
+  min-height: 34px;
+  margin: 0;
+  --padding-start: 6px;
+  --padding-end: 6px;
+  --padding-top: 6px;
+  --padding-bottom: 6px;
+}
+
+.operator-profile-modal::part(content) {
+  --width: min(960px, calc(100vw - 24px));
+  --height: min(92vh, 900px);
+  --border-radius: 18px;
+}
+
+.operator-profile-modal-content {
+  --background: var(--color-bg);
+}
+
+.operator-profile-modal-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.operator-profile-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.operator-profile-view-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.operator-document-row + .operator-document-row {
+  margin-top: 8px;
+}
+
+@media (max-width: 720px) {
+  .operator-upload-actions,
+  .operator-inline-actions,
+  .operator-repeatable-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .operator-upload-button {
+    width: 100%;
+  }
+
+  .operator-profile-modal-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .operator-profile-view-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .operator-list-item::part(native) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 0;
+  }
+
+  .operator-list-actions {
+    margin-left: auto;
+    width: auto;
+    justify-content: flex-end;
+  }
+
+  .operator-list-actions ion-button {
+    flex: 0 0 auto;
+  }
+}

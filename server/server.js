@@ -21,6 +21,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 const { prisma } = require("./server-scanner/src/prisma");
+const { centralPrisma } = require("./server-scanner/src/centralPrisma");
 const registerPrinterRoutes = require("./server-printer/registerPrinterRoutes");
 const newCyclesRouter = require("./server-scanner/src/routes/cycles");
 const newStockRouter = require("./server-scanner/src/routes/stock");
@@ -36,6 +37,10 @@ const {
   startUnfinishedAutoFinishService,
   stopUnfinishedAutoFinishService,
 } = require("./server-scanner/src/services/unfinishedAutoFinish");
+const {
+  startCentralCatalogSync,
+  stopCentralCatalogSync,
+} = require("./server-scanner/src/services/centralCatalogSync");
 
 const app = express();
 
@@ -245,7 +250,7 @@ const resolveHttpsCredentials = async () => {
 
 const closePrisma = async () => {
   try {
-    await prisma.$disconnect();
+    await Promise.all([prisma.$disconnect(), centralPrisma.$disconnect()]);
   } catch (error) {
     console.warn(`⚠️ Prisma disconnect failed: ${error.message}`);
   }
@@ -261,6 +266,7 @@ const shutdown = (reason, exitCode = 0) => {
   }
   stopLowStockMonitor();
   stopUnfinishedAutoFinishService();
+  stopCentralCatalogSync();
   const runningServers = [httpServer, httpsServer].filter(Boolean);
   if (runningServers.length > 0) {
     let pending = runningServers.length;
@@ -323,10 +329,45 @@ app.get("/", (req, res) => {
 
 app.get("/new/health", async (req, res) => {
   try {
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({ ok: true, db: "connected" });
+    await Promise.all([prisma.$queryRaw`SELECT 1`, centralPrisma.$queryRaw`SELECT 1`]);
+    res.json({
+      ok: true,
+      db: {
+        stock: "connected",
+        central: "connected",
+      },
+    });
   } catch (error) {
-    res.status(500).json({ ok: false, db: "error", error: error.message });
+    res.status(500).json({
+      ok: false,
+      db: {
+        stock: "error",
+        central: "error",
+      },
+      error: error.message,
+    });
+  }
+});
+
+app.get("/health", async (req, res) => {
+  try {
+    await Promise.all([prisma.$queryRaw`SELECT 1`, centralPrisma.$queryRaw`SELECT 1`]);
+    res.json({
+      ok: true,
+      db: {
+        stock: "connected",
+        central: "connected",
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      db: {
+        stock: "error",
+        central: "error",
+      },
+      error: error.message,
+    });
   }
 });
 
@@ -340,6 +381,11 @@ app.use("/new/api/stock", newStockRouter);
 app.use("/new/api/meta", newMetaRouter);
 app.use("/new/api/db-viewer", newDbViewerRouter);
 app.use("/new/desktop", newDesktopRouter);
+app.use("/api/cycles", newCyclesRouter);
+app.use("/api/stock", newStockRouter);
+app.use("/api/meta", newMetaRouter);
+app.use("/api/db-viewer", newDbViewerRouter);
+app.use("/desktop", newDesktopRouter);
 
 app.get("/api/app/version", (req, res) => {
   const requiredBuild = readRequiredBuildNumber();
@@ -390,8 +436,15 @@ async function startServer() {
   logBrandsCsvModifiedTime();
   void startLowStockMonitor();
   void startUnfinishedAutoFinishService();
+  void startCentralCatalogSync();
   console.log("Available endpoints:");
+  console.log("  GET  /health - StockLens health");
   console.log("  GET  /new/health - New StockLens health");
+  console.log("  GET  /api/meta/* - StockLens metadata");
+  console.log("  GET  /api/stock/* - StockLens stock routes");
+  console.log("  GET  /api/cycles/* - StockLens cycle routes");
+  console.log("  GET  /api/db-viewer/* - StockLens DB viewer routes");
+  console.log("  GET  /desktop/api/* - Desktop compatibility routes");
   console.log("  GET  /new/api/app/version - New StockLens build requirement");
   console.log("  GET  /new/api/meta/* - New StockLens metadata");
   console.log("  GET  /new/api/stock/* - New StockLens stock routes");

@@ -192,12 +192,34 @@ model CycleProductEvent {
 }
 
 model Worker {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  phone     String?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id                    Int      @id @default(autoincrement())
+  name                  String   @unique
+  fatherName            String?  @map("father_name")
+  designationId         Int?     @map("designation_id")
+  dateOfBirth           DateTime? @map("date_of_birth")
+  dateOfJoining         DateTime? @map("date_of_joining")
+  dateOfResignation     DateTime? @map("date_of_resignation")
+  permanentAddress      String?  @map("permanent_address")
+  temporaryAddress      String?  @map("temporary_address")
+  aadhaarNumber         String?  @map("aadhaar_number")
+  email                 String?
+  bankAccountNumber     String?  @map("bank_account_number")
+  ifscCode              String?  @map("ifsc_code")
+  recommendedBy         String   @default("Direct") @map("recommended_by")
+  workLocationId        Int?     @map("work_location_id")
+  profileImageBase64    String?  @map("profile_image_base64")
+  profileImageMimeType  String?  @map("profile_image_mime_type")
+  profileImageFileName  String?  @map("profile_image_file_name")
+  resumeFileBase64      String?  @map("resume_file_base64")
+  resumeFileMimeType    String?  @map("resume_file_mime_type")
+  resumeFileName        String?  @map("resume_file_name")
+  aadhaarImageBase64    String?  @map("aadhaar_image_base64")
+  aadhaarImageMimeType  String?  @map("aadhaar_image_mime_type")
+  aadhaarImageFileName  String?  @map("aadhaar_image_file_name")
+  phone                 String?
+  active                Boolean  @default(true)
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
 
   unfinishedUpdatedRows CycleUnfinishedStock[] @relation("UnfinishedUpdatedBy")
   finishedUpdatedRows   CycleFinishedStock[]   @relation("FinishedUpdatedBy")
@@ -207,8 +229,77 @@ model Worker {
   diffFinishedByRows    DiffItem[]             @relation("DiffFinishedBy")
   events                CycleProductEvent[]
   operatorDailyMismatchSummaries OperatorDailyMismatchSummary[]
+  designation           WorkerDesignation?     @relation(fields: [designationId], references: [id], onDelete: SetNull)
+  workLocation          WorkerWorkLocation?    @relation(fields: [workLocationId], references: [id], onDelete: SetNull)
+  phoneNumbers          WorkerPhoneNumber[]
+  documents             WorkerDocument[]
+
+  @@index([designationId], map: "idx_workers_designation_id")
+  @@index([workLocationId], map: "idx_workers_work_location_id")
+  @@index([active], map: "idx_workers_active")
 
   @@map("workers")
+}
+
+model WorkerDesignation {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workers Worker[]
+
+  @@map("worker_designations")
+}
+
+model WorkerWorkLocation {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workers Worker[]
+
+  @@map("worker_work_locations")
+}
+
+model WorkerPhoneNumber {
+  id          Int      @id @default(autoincrement())
+  workerId    Int      @map("worker_id")
+  label       String?
+  phoneNumber String   @map("phone_number")
+  isPrimary   Boolean  @default(false) @map("is_primary")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  worker Worker @relation(fields: [workerId], references: [id], onDelete: Cascade)
+
+  @@index([workerId], map: "idx_worker_phone_numbers_worker_id")
+  @@index([workerId, isPrimary], map: "idx_worker_phone_numbers_primary")
+  @@map("worker_phone_numbers")
+}
+
+model WorkerDocument {
+  id             Int      @id @default(autoincrement())
+  workerId       Int      @map("worker_id")
+  category       String
+  label          String?
+  textValue      String?  @map("text_value")
+  fileName       String?  @map("file_name")
+  mimeType       String?  @map("mime_type")
+  fileDataBase64 String?  @map("file_data_base64")
+  sortOrder      Int      @default(0) @map("sort_order")
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  worker Worker @relation(fields: [workerId], references: [id], onDelete: Cascade)
+
+  @@index([workerId], map: "idx_worker_documents_worker_id")
+  @@index([workerId, category], map: "idx_worker_documents_category")
+  @@map("worker_documents")
 }
 
 model Device {

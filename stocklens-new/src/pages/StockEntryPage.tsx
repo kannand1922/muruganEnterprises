@@ -73,6 +73,7 @@ import {
   type FinishedProgressSummary,
   type UnfinishedStockRow,
 } from "../api/stockApi";
+import { getApiBaseUrl } from "../config/env";
 import { CURRENT_LOCATION_ID_KEY, LOCATION_CHANGED_EVENT } from "../config/location";
 import { getCurrentPhoneIdFromStorage } from "../config/phone";
 
@@ -348,6 +349,38 @@ function getActivityDateKey(isoDateTime: string) {
   return String(isoDateTime || "").slice(0, 10);
 }
 
+function buildMasterStatusAgeLabel(status: MasterStatus | null) {
+  if (!status) return "-";
+  if (status.ageLabel && status.ageLabel.trim()) return status.ageLabel;
+
+  const checkedAtMs = new Date(status.checkedAt || Date.now()).getTime();
+  const lastModifiedMs = new Date(status.lastModified || "").getTime();
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(lastModifiedMs)) {
+    return status.ageMinutes >= 0 ? `${status.ageMinutes} minute${status.ageMinutes === 1 ? "" : "s"} ago` : "-";
+  }
+
+  const ageMs = Math.max(0, checkedAtMs - lastModifiedMs);
+  const totalMinutes = Math.floor(ageMs / 60000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) {
+    return hours > 0
+      ? `${days} day${days === 1 ? "" : "s"} ${hours} hour${hours === 1 ? "" : "s"} ago`
+      : `${days} day${days === 1 ? "" : "s"} ago`;
+  }
+  if (hours > 0) {
+    return minutes > 0
+      ? `${hours} hour${hours === 1 ? "" : "s"} ${minutes} minute${minutes === 1 ? "" : "s"} ago`
+      : `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  }
+  if (minutes > 0) {
+    return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  }
+  return "just now";
+}
+
 function getStrictLocationHeaderKey(location: ShopLocation | null) {
   return normalizeLocationKey(location?.locationName);
 }
@@ -621,6 +654,8 @@ export function StockEntryPage() {
   const todayKey = getTodayDateString();
   const isCycleActive = Boolean(activeCycleId);
   const isMasterBlocked = masterStatusCheckFailed || Boolean(masterStatus && !masterStatus.allowed);
+  const configuredBackendUrl = getApiBaseUrl();
+  const masterStatusAgeLabel = buildMasterStatusAgeLabel(masterStatus);
 
   const masterTotalProducts = useMemo(() => {
     const codeSet = new Set<string>();
@@ -1970,10 +2005,13 @@ export function StockEntryPage() {
                   ) : (
                     <>
                       <p>
-                        brands.csv was last modified {masterStatus?.ageMinutes ?? "-"} minutes ago (max{" "}
-                        {masterStatus?.maxAgeMinutes ?? "-"} minutes).
+                        brands.csv was last modified {masterStatusAgeLabel} (max{" "}
+                        {masterStatus?.maxAgeMinutes ?? "-"} minutes allowed).
                       </p>
                       <p>Last modified: {masterStatus?.lastModifiedIST || masterStatus?.lastModified || "-"}</p>
+                      <p>Checked at: {masterStatus?.checkedAtIST || masterStatus?.checkedAt || "-"}</p>
+                      <p>Backend: {configuredBackendUrl}</p>
+                      <p>Source: {masterStatus?.sourceFile || "-"}</p>
                     </>
                   )}
                 </div>

@@ -126,6 +126,152 @@ export type VerifyUncheckedFinishedRow = {
   shopLocationName: string;
 };
 
+export type StockOverviewMismatchRow = {
+  id: number | null;
+  itemCode: string;
+  itemName: string;
+  brandName: string;
+  packValue: string;
+  name: string;
+  bpc: number;
+  mrp: number | null;
+  shopLocationId: number | null;
+  shopLocationName: string;
+  enteredBottles: number;
+  currentStockBottles: number;
+  diffBottles: number;
+  diffFormatted: string;
+  priceDiff: number;
+  priceDiffFormatted: string;
+  updatedAt: string | null;
+  operatorId: number | null;
+};
+
+export type StockOverviewUncheckedRow = {
+  itemCode: string;
+  itemName: string;
+  brandName: string;
+  packValue: string;
+  name: string;
+  bpc: number | null;
+  mrp: number | null;
+  shopLocationId: number;
+  shopLocationName: string;
+};
+
+export type StockOverviewLocation = {
+  shopLocationId: number;
+  shopLocationCode: string;
+  shopLocationName: string;
+  shopLocationLabel: string;
+  scannedCount: number;
+  trackedCount: number;
+  matchedCount: number;
+  unmatchedCount: number;
+  uncheckedCount: number;
+  mismatchCount: number;
+  operatorCount: number;
+  totalDiffBottles: number;
+  totalDiffValue: number;
+  totalDiffValueFormatted: string;
+  positiveDiffValue: number;
+  negativeDiffValue: number;
+  unmatchedRows: StockOverviewMismatchRow[];
+  uncheckedRows: StockOverviewUncheckedRow[];
+  mismatchRows: StockOverviewMismatchRow[];
+};
+
+export type StockOverviewResponse = {
+  success: boolean;
+  shopName: string;
+  operatorCount: number;
+  cycle: {
+    id: number;
+    sno: number | null;
+    status: string;
+    startDate: string;
+    endDate?: string | null;
+    cycleDate: string;
+    currentCycle: boolean;
+  };
+  summary: {
+    scannedCount: number;
+    trackedCount: number;
+    matchedCount: number;
+    unmatchedCount: number;
+    uncheckedCount: number;
+    mismatchCount: number;
+    totalDiffBottles: number;
+    totalDiffValue: number;
+    totalDiffValueFormatted: string;
+    locationCount: number;
+    operatorCount: number;
+  };
+  today?: {
+    activityDate: string;
+    operatorCount: number;
+    summary: {
+      scannedCount: number;
+      trackedCount: number;
+      matchedCount: number;
+      unmatchedCount: number;
+      uncheckedCount: number;
+      mismatchCount: number;
+      totalDiffBottles: number;
+      totalDiffValue: number;
+      totalDiffValueFormatted: string;
+      locationCount: number;
+      operatorCount: number;
+    };
+    locations: StockOverviewLocation[];
+  };
+  locations: StockOverviewLocation[];
+};
+
+export type StockOverviewOperator = {
+  shopLocationId: number;
+  shopLocationName: string;
+  shopLocationLabel: string;
+  operatorId: number;
+  operatorName: string;
+  scannedCount: number;
+  matchedCount: number;
+  mismatchCount: number;
+  totalDiffBottles: number;
+  totalDiffValue: number;
+  totalDiffValueFormatted: string;
+  rows: StockOverviewMismatchRow[];
+};
+
+export type StockOperatorOverviewResponse = {
+  success: boolean;
+  cycle: {
+    id: number;
+    sno: number | null;
+    status: string;
+    startDate: string;
+    endDate?: string | null;
+    cycleDate: string;
+    currentCycle: boolean;
+  };
+  summary: {
+    locationCount: number;
+    operatorCount: number;
+    scannedCount: number;
+    matchedCount: number;
+    mismatchCount: number;
+    totalDiffBottles: number;
+    totalDiffValue: number;
+    totalDiffValueFormatted: string;
+  };
+  locations: Array<{
+    shopLocationId: number;
+    shopLocationName: string;
+    shopLocationLabel: string;
+    operators: StockOverviewOperator[];
+  }>;
+};
+
 export type DiffItem = {
   id: number;
   diffBatchId: number;
@@ -225,6 +371,28 @@ export async function getFinishedProgressSummary(params: {
     search.set("cycleId", String(params.cycleId));
   }
   return apiGet<FinishedProgressSummary>(`/stock/finished/progress?${search.toString()}`);
+}
+
+export async function getStockOverview(params?: {
+  cycleId?: number | null;
+  shopLocationId?: number | null;
+}) {
+  const search = new URLSearchParams();
+  if (params?.cycleId) search.set("cycleId", String(params.cycleId));
+  if (params?.shopLocationId) search.set("shopLocationId", String(params.shopLocationId));
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return apiGet<StockOverviewResponse>(`/stock/overview${suffix}`);
+}
+
+export async function getStockOperatorOverview(params?: {
+  cycleId?: number | null;
+  shopLocationId?: number | null;
+}) {
+  const search = new URLSearchParams();
+  if (params?.cycleId) search.set("cycleId", String(params.cycleId));
+  if (params?.shopLocationId) search.set("shopLocationId", String(params.shopLocationId));
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return apiGet<StockOperatorOverviewResponse>(`/stock/overview/operators${suffix}`);
 }
 
 export async function upsertUnfinishedStock(payload: {

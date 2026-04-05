@@ -148,6 +148,17 @@ function formatTimeIst(value) {
   });
 }
 
+function formatDateTimeIst(value) {
+  if (!value) return "N/A";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "N/A";
+  return date.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 function getLocalDateKeyIst() {
   try {
     const value = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
@@ -1189,6 +1200,292 @@ function toSignedDiffLabel(diffValue) {
   return numeric > 0 ? `+${numeric}` : `${numeric}`;
 }
 
+function isMeaningfulDiffBottles(diffBottles) {
+  // In stock notation, 0.1 means one bottle. Ignore anything below one bottle.
+  return Math.abs(Number(diffBottles) || 0) >= 1;
+}
+
+function toSignedCurrency(value) {
+  const numeric = Number(value) || 0;
+  if (numeric === 0) return "0.00";
+  const formatted = Math.abs(numeric).toFixed(2);
+  return numeric > 0 ? `+${formatted}` : `-${formatted}`;
+}
+
+async function resolveCycleForOverview(cycleId) {
+  if (cycleId != null) {
+    return prisma.cycle.findUnique({ where: { id: Number(cycleId) } });
+  }
+
+  const activeCycle = await prisma.cycle.findFirst({
+    where: { status: "active" },
+    orderBy: [{ startDate: "desc" }],
+  });
+  if (activeCycle) {
+    return activeCycle;
+  }
+
+  return prisma.cycle.findFirst({
+    orderBy: [{ startDate: "desc" }],
+  });
+}
+
+function buildStockDiffDetailRow(row, master, location) {
+  const safeBpc = Number(row?.bpc || master?.bpc) || 12;
+  const diffBottles = Math.trunc(Number(row?.diffBottles || 0));
+  const mrp = row?.mrp ?? master?.mrp ?? null;
+  const priceDiff = Number.isFinite(Number(mrp)) ? diffBottles * Number(mrp) : 0;
+
+  return {
+    id: row?.id || null,
+    itemCode: row?.itemCode || master?.itemCode || "",
+    itemName: row?.itemName || master?.itemName || "",
+    brandName: row?.brandName || master?.brandName || "",
+    packValue: row?.packValue || master?.packValue || "",
+    bpc: safeBpc,
+    mrp,
+    shopLocationId: location?.id || row?.shopLocationId || null,
+    shopLocationName: location?.locationName || "",
+    enteredBottles: Math.trunc(Number(row?.quantityBottles || 0)),
+    currentStockBottles: Math.trunc(Number(row?.currentStockBottles || 0)),
+    diffBottles,
+    diffFormatted: formatBottleCountAsStock(diffBottles, safeBpc, true),
+    priceDiff,
+    priceDiffFormatted: toSignedCurrency(priceDiff),
+    updatedAt: row?.updatedAt || row?.finishedAt || row?.activityDate || null,
+    operatorId: row?.lastUpdatedByWorkerId || row?.finishedByWorkerId || null,
+  };
+}
+
+function buildLatestFinishedByKey(rows, predicate = null) {
+  const latestByKey = new Map();
+  for (const row of rows) {
+    if (predicate && !predicate(row)) continue;
+    const codeKey = normalizeItemCode(row.itemCode);
+    if (!codeKey || !row.shopLocationId) continue;
+    const key = `${row.shopLocationId}|${codeKey}`;
+    const timeMs = new Date(
+      row.finishedAt || row.updatedAt || row.createdAt || row.activityDate
+    ).getTime();
+    const existing = latestByKey.get(key);
+    if (!existing || timeMs >= existing.timeMs) {
+      latestByKey.set(key, { row, timeMs });
+    }
+  }
+  return latestByKey;
+}
+
+function buildOperatorSetByLocationFromEventRows(rows) {
+  const operatorSet = new Set();
+  const operatorSetByLocation = new Map();
+  for (const row of rows) {
+    const workerId = Number(row.workerId || 0);
+    const locationId = Number(row.shopLocationId || 0);
+    if (!workerId || !locationId) continue;
+    operatorSet.add(workerId);
+    if (!operatorSetByLocation.has(locationId)) {
+      operatorSetByLocation.set(locationId, new Set());
+    }
+    operatorSetByLocation.get(locationId).add(workerId);
+  }
+  return { operatorSet, operatorSetByLocation };
+}
+
+function buildOperatorSetByLocationFromFinishedRows(latestFinishedByKey) {
+  const operatorSet = new Set();
+  const operatorSetByLocation = new Map();
+  for (const entry of latestFinishedByKey.values()) {
+    const row = entry.row;
+    const workerId = Number(row.lastUpdatedByWorkerId || row.finishedByWorkerId || 0);
+    const locationId = Number(row.shopLocationId || 0);
+    if (!workerId || !locationId) continue;
+    operatorSet.add(workerId);
+    if (!operatorSetByLocation.has(locationId)) {
+      operatorSetByLocation.set(locationId, new Set());
+    }
+    operatorSetByLocation.get(locationId).add(workerId);
+  }
+  return { operatorSet, operatorSetByLocation };
+}
+
+function buildOverviewLocationSummaries({
+  locations,
+  masterRows,
+  masterByCode,
+  latestFinishedByKey,
+  unfinishedCodeMap = new Map(),
+  operatorSetByLocation = new Map(),
+  todayMode = false,
+}) {
+  return locations.map((location) => {
+    const trackedCodeSet = new Set();
+    const scannedRows = [];
+    const matchedRows = [];
+    const unmatchedRows = [];
+    const mismatchRows = [];
+    const uncheckedRows = [];
+
+    for (const master of masterRows) {
+      const codeKey = normalizeItemCode(master.itemCode);
+      if (!codeKey || trackedCodeSet.has(codeKey)) continue;
+      if (!hasPositiveStockForLocation(master, location)) continue;
+
+      trackedCodeSet.add(codeKey);
+      const latestRow = latestFinishedByKey.get(`${location.id}|${codeKey}`)?.row || null;
+      const unfinishedCodes = unfinishedCodeMap.get(location.id) || new Set();
+
+      if (!latestRow) {
+        if (todayMode || !unfinishedCodes.has(codeKey)) {
+          uncheckedRows.push({
+            itemCode: master.itemCode || "",
+            itemName: master.itemName || "",
+            brandName: master.brandName || "",
+            packValue: master.packValue || "",
+            bpc: Number(master.bpc) || null,
+            mrp: master.mrp ?? null,
+            shopLocationId: location.id,
+            shopLocationName: location.locationName || "",
+          });
+        }
+        continue;
+      }
+
+      scannedRows.push(latestRow);
+      if (isMeaningfulDiffBottles(latestRow.diffBottles) || latestRow.isMatched === false) {
+        const diffRow = buildStockDiffDetailRow(latestRow, master, location);
+        unmatchedRows.push(diffRow);
+        mismatchRows.push(diffRow);
+      } else {
+        matchedRows.push({
+          itemCode: latestRow.itemCode || master.itemCode || "",
+          name: buildDisplayName(
+            latestRow.brandName || master.brandName,
+            latestRow.packValue || master.packValue,
+            latestRow.itemName || master.itemName,
+            latestRow.itemCode || master.itemCode
+          ),
+        });
+      }
+    }
+
+    for (const entry of latestFinishedByKey.values()) {
+      const latestRow = entry.row;
+      if (latestRow.shopLocationId !== location.id) continue;
+      const codeKey = normalizeItemCode(latestRow.itemCode);
+      if (!codeKey || trackedCodeSet.has(codeKey)) continue;
+      const master = masterByCode.get(codeKey) || null;
+      if (!master || !hasPositiveStockForLocation(master, location)) continue;
+      scannedRows.push(latestRow);
+      if (isMeaningfulDiffBottles(latestRow.diffBottles) || latestRow.isMatched === false) {
+        const diffRow = buildStockDiffDetailRow(latestRow, master, location);
+        unmatchedRows.push(diffRow);
+        mismatchRows.push(diffRow);
+      } else {
+        matchedRows.push({
+          itemCode: latestRow.itemCode || "",
+          name: buildDisplayName(
+            latestRow.brandName || master?.brandName,
+            latestRow.packValue || master?.packValue,
+            latestRow.itemName || master?.itemName,
+            latestRow.itemCode
+          ),
+        });
+      }
+    }
+
+    const totalDiffBottles = mismatchRows.reduce(
+      (sum, row) => sum + (Number(row.diffBottles) || 0),
+      0
+    );
+    const totalDiffValue = mismatchRows.reduce(
+      (sum, row) => sum + (Number(row.priceDiff) || 0),
+      0
+    );
+
+    return {
+      shopLocationId: location.id,
+      shopLocationCode: location.locationCode,
+      shopLocationName: location.locationName,
+      shopLocationLabel: getLocationLabel(location),
+      scannedCount: scannedRows.length,
+      trackedCount: trackedCodeSet.size,
+      matchedCount: matchedRows.length,
+      unmatchedCount: unmatchedRows.length,
+      uncheckedCount: uncheckedRows.length,
+      mismatchCount: mismatchRows.length,
+      operatorCount: (operatorSetByLocation.get(location.id) || new Set()).size,
+      totalDiffBottles,
+      totalDiffValue,
+      totalDiffValueFormatted: toSignedCurrency(totalDiffValue),
+      positiveDiffValue: mismatchRows.reduce(
+        (sum, row) => sum + Math.max(Number(row.priceDiff) || 0, 0),
+        0
+      ),
+      negativeDiffValue: mismatchRows.reduce(
+        (sum, row) => sum + Math.min(Number(row.priceDiff) || 0, 0),
+        0
+      ),
+      unmatchedRows: sortNames(
+        unmatchedRows.map((row) => ({
+          name: buildDisplayName(row.brandName, row.packValue, row.itemName, row.itemCode),
+          ...row,
+        }))
+      ),
+      uncheckedRows: sortNames(
+        uncheckedRows.map((row) => ({
+          name: buildDisplayName(row.brandName, row.packValue, row.itemName, row.itemCode),
+          ...row,
+        }))
+      ),
+      matchedRows: sortNames(
+        matchedRows.map((row) => ({
+          itemCode: row.itemCode,
+          name: row.name,
+        }))
+      ),
+      mismatchRows: sortNames(
+        mismatchRows.map((row) => ({
+          name: buildDisplayName(row.brandName, row.packValue, row.itemName, row.itemCode),
+          ...row,
+        }))
+      ),
+    };
+  });
+}
+
+function buildOverviewSummary(locationSummaries, operatorCount) {
+  const summary = locationSummaries.reduce(
+    (acc, row) => {
+      acc.scannedCount += row.scannedCount;
+      acc.trackedCount += row.trackedCount;
+      acc.matchedCount += row.matchedCount;
+      acc.unmatchedCount += row.unmatchedCount;
+      acc.uncheckedCount += row.uncheckedCount;
+      acc.mismatchCount += row.mismatchCount;
+      acc.totalDiffBottles += row.totalDiffBottles;
+      acc.totalDiffValue += row.totalDiffValue;
+      return acc;
+    },
+    {
+      scannedCount: 0,
+      trackedCount: 0,
+      matchedCount: 0,
+      unmatchedCount: 0,
+      uncheckedCount: 0,
+      mismatchCount: 0,
+      totalDiffBottles: 0,
+      totalDiffValue: 0,
+    }
+  );
+
+  return {
+    ...summary,
+    locationCount: locationSummaries.length,
+    operatorCount,
+    totalDiffValueFormatted: toSignedCurrency(summary.totalDiffValue),
+  };
+}
+
 function sortDiffRowsByLocation(rows) {
   return [...rows].sort((a, b) => {
     const sortA = Number.isFinite(Number(a?.locationSortOrder))
@@ -1241,6 +1538,479 @@ function buildLocationDiffSections(rows) {
       ...section,
       rows: sortDiffRowsByLocation(section.rows),
     }));
+}
+
+async function buildCycleStockOverviewDataset({ cycleId = null, shopLocationId = null } = {}) {
+  const cycle = await resolveCycleForOverview(cycleId);
+  if (!cycle) {
+    throw new Error("No active/current cycle found");
+  }
+
+  const [
+    shopInfo,
+    locations,
+    finishedRows,
+    unfinishedRows,
+    eventRows,
+    masterRows,
+  ] = await Promise.all([
+    prisma.shopInfo.findUnique({ where: { id: 1 } }),
+    prisma.shopLocation.findMany({
+      ...(shopLocationId ? { where: { id: Number(shopLocationId) } } : {}),
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+    }),
+    prisma.cycleFinishedStock.findMany({
+      where: {
+        cycleId: cycle.id,
+        ...(shopLocationId ? { shopLocationId: Number(shopLocationId) } : {}),
+      },
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    }),
+    prisma.cycleUnfinishedStock.findMany({
+      where: {
+        cycleId: cycle.id,
+        ...(shopLocationId ? { shopLocationId: Number(shopLocationId) } : {}),
+      },
+      select: {
+        itemCode: true,
+        shopLocationId: true,
+      },
+    }),
+    prisma.cycleProductEvent.findMany({
+      where: {
+        cycleId: cycle.id,
+        workerId: { not: null },
+        ...(shopLocationId ? { shopLocationId: Number(shopLocationId) } : {}),
+      },
+      select: {
+        workerId: true,
+        shopLocationId: true,
+      },
+    }),
+    loadMasterProducts({ includeAll: true }),
+  ]);
+
+  const masterByCode = new Map(
+    masterRows.map((row) => [normalizeItemCode(row.itemCode), row])
+  );
+  const latestFinishedByKey = buildLatestFinishedByKey(finishedRows);
+
+  const unfinishedCodeMap = new Map();
+  for (const row of unfinishedRows) {
+    const codeKey = normalizeItemCode(row.itemCode);
+    if (!codeKey || !row.shopLocationId) continue;
+    if (!unfinishedCodeMap.has(row.shopLocationId)) {
+      unfinishedCodeMap.set(row.shopLocationId, new Set());
+    }
+    unfinishedCodeMap.get(row.shopLocationId).add(codeKey);
+  }
+
+  const { operatorSet, operatorSetByLocation } = buildOperatorSetByLocationFromEventRows(eventRows);
+  const locationSummaries = buildOverviewLocationSummaries({
+    locations,
+    masterRows,
+    masterByCode,
+    latestFinishedByKey,
+    unfinishedCodeMap,
+    operatorSetByLocation,
+  });
+  const summary = buildOverviewSummary(locationSummaries, operatorSet.size);
+
+  const todayKey = getLocalDateKeyIst();
+  const latestTodayFinishedByKey = buildLatestFinishedByKey(
+    finishedRows,
+    (row) => String(row.activityDate || "").slice(0, 10) === todayKey
+  );
+  const {
+    operatorSet: todayOperatorSet,
+    operatorSetByLocation: todayOperatorSetByLocation,
+  } = buildOperatorSetByLocationFromFinishedRows(latestTodayFinishedByKey);
+  const todayLocationSummaries = buildOverviewLocationSummaries({
+    locations,
+    masterRows,
+    masterByCode,
+    latestFinishedByKey: latestTodayFinishedByKey,
+    unfinishedCodeMap: new Map(),
+    operatorSetByLocation: todayOperatorSetByLocation,
+    todayMode: true,
+  });
+  const todaySummary = buildOverviewSummary(todayLocationSummaries, todayOperatorSet.size);
+
+  return {
+    cycle: {
+      id: cycle.id,
+      sno: cycle.sno ?? null,
+      status: cycle.status,
+      startDate: cycle.startDate,
+      endDate: cycle.endDate,
+      cycleDate: getCycleDateLabel(cycle),
+      currentCycle: cycle.status === "active",
+    },
+    shopName: String(shopInfo?.shopName || "").trim() || "Shop Name",
+    operatorCount: operatorSet.size,
+    summary,
+    today: {
+      activityDate: todayKey,
+      operatorCount: todayOperatorSet.size,
+      summary: todaySummary,
+      locations: todayLocationSummaries,
+    },
+    locations: locationSummaries,
+  };
+}
+
+async function buildCycleOperatorOverviewDataset({ cycleId = null, shopLocationId = null } = {}) {
+  const cycle = await resolveCycleForOverview(cycleId);
+  if (!cycle) {
+    throw new Error("No active/current cycle found");
+  }
+
+  const [locations, workers, finishedRows, masterRows] = await Promise.all([
+    prisma.shopLocation.findMany({
+      ...(shopLocationId ? { where: { id: Number(shopLocationId) } } : {}),
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+    }),
+    prisma.worker.findMany({ orderBy: [{ name: "asc" }, { id: "asc" }] }),
+    prisma.cycleFinishedStock.findMany({
+      where: {
+        cycleId: cycle.id,
+        ...(shopLocationId ? { shopLocationId: Number(shopLocationId) } : {}),
+      },
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    }),
+    loadMasterProducts({ includeAll: true }),
+  ]);
+
+  const locationById = new Map(locations.map((row) => [row.id, row]));
+  const workerById = new Map(workers.map((row) => [row.id, row]));
+  const masterByCode = new Map(
+    masterRows.map((row) => [normalizeItemCode(row.itemCode), row])
+  );
+
+  const latestByKey = new Map();
+  for (const row of finishedRows) {
+    const codeKey = normalizeItemCode(row.itemCode);
+    if (!codeKey || !row.shopLocationId) continue;
+    const key = `${row.shopLocationId}|${codeKey}`;
+    const timeMs = new Date(
+      row.finishedAt || row.updatedAt || row.createdAt || row.activityDate
+    ).getTime();
+    const existing = latestByKey.get(key);
+    if (!existing || timeMs >= existing.timeMs) {
+      latestByKey.set(key, { row, timeMs });
+    }
+  }
+
+  const operatorLocationMap = new Map();
+  for (const entry of latestByKey.values()) {
+    const row = entry.row;
+    const operatorId = Number(row.lastUpdatedByWorkerId || row.finishedByWorkerId || 0);
+    if (!operatorId || !row.shopLocationId) continue;
+
+    const location = locationById.get(row.shopLocationId) || null;
+    const master = masterByCode.get(normalizeItemCode(row.itemCode)) || null;
+    const locationKey = `${row.shopLocationId}|${operatorId}`;
+    if (!operatorLocationMap.has(locationKey)) {
+      operatorLocationMap.set(locationKey, {
+        shopLocationId: row.shopLocationId,
+        shopLocationName: location?.locationName || "",
+        shopLocationLabel: getLocationLabel(location),
+        operatorId,
+        operatorName: workerById.get(operatorId)?.name || `#${operatorId}`,
+        scannedCount: 0,
+        matchedCount: 0,
+        mismatchCount: 0,
+        totalDiffBottles: 0,
+        totalDiffValue: 0,
+        rows: [],
+      });
+    }
+
+    const bucket = operatorLocationMap.get(locationKey);
+    bucket.scannedCount += 1;
+
+    if (isMeaningfulDiffBottles(row.diffBottles) || row.isMatched === false) {
+      const diffRow = buildStockDiffDetailRow(row, master, location);
+      bucket.mismatchCount += 1;
+      bucket.totalDiffBottles += Number(diffRow.diffBottles) || 0;
+      bucket.totalDiffValue += Number(diffRow.priceDiff) || 0;
+      bucket.rows.push({
+        ...diffRow,
+        name: buildDisplayName(diffRow.brandName, diffRow.packValue, diffRow.itemName, diffRow.itemCode),
+      });
+    } else {
+      bucket.matchedCount += 1;
+    }
+  }
+
+  const groupedLocations = new Map();
+  for (const row of operatorLocationMap.values()) {
+    if (!groupedLocations.has(row.shopLocationId)) {
+      groupedLocations.set(row.shopLocationId, {
+        shopLocationId: row.shopLocationId,
+        shopLocationName: row.shopLocationName,
+        shopLocationLabel: row.shopLocationLabel,
+        operators: [],
+      });
+    }
+    groupedLocations.get(row.shopLocationId).operators.push({
+      ...row,
+      totalDiffValueFormatted: toSignedCurrency(row.totalDiffValue),
+      rows: sortNames(row.rows),
+    });
+  }
+
+  const locationsData = Array.from(groupedLocations.values())
+    .sort((a, b) => {
+      const sortA = locationById.get(a.shopLocationId)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      const sortB = locationById.get(b.shopLocationId)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      if (sortA !== sortB) return sortA - sortB;
+      return String(a.shopLocationName || "").localeCompare(String(b.shopLocationName || ""));
+    })
+    .map((locationRow) => ({
+      ...locationRow,
+      operators: locationRow.operators.sort((a, b) => {
+        if (b.mismatchCount !== a.mismatchCount) return b.mismatchCount - a.mismatchCount;
+        if (b.scannedCount !== a.scannedCount) return b.scannedCount - a.scannedCount;
+        return String(a.operatorName || "").localeCompare(String(b.operatorName || ""));
+      }),
+    }));
+
+  const summary = locationsData.reduce(
+    (acc, locationRow) => {
+      acc.locationCount += 1;
+      acc.operatorCount += locationRow.operators.length;
+      locationRow.operators.forEach((operator) => {
+        acc.scannedCount += operator.scannedCount;
+        acc.matchedCount += operator.matchedCount;
+        acc.mismatchCount += operator.mismatchCount;
+        acc.totalDiffBottles += operator.totalDiffBottles;
+        acc.totalDiffValue += operator.totalDiffValue;
+      });
+      return acc;
+    },
+    {
+      locationCount: 0,
+      operatorCount: 0,
+      scannedCount: 0,
+      matchedCount: 0,
+      mismatchCount: 0,
+      totalDiffBottles: 0,
+      totalDiffValue: 0,
+    }
+  );
+
+  return {
+    cycle: {
+      id: cycle.id,
+      sno: cycle.sno ?? null,
+      status: cycle.status,
+      startDate: cycle.startDate,
+      endDate: cycle.endDate,
+      cycleDate: getCycleDateLabel(cycle),
+      currentCycle: cycle.status === "active",
+    },
+    summary: {
+      ...summary,
+      totalDiffValueFormatted: toSignedCurrency(summary.totalDiffValue),
+    },
+    locations: locationsData,
+  };
+}
+
+function formatSignedWholeNumber(value) {
+  const numeric = Number(value) || 0;
+  if (numeric === 0) return "0";
+  return numeric > 0 ? `+${numeric}` : `${numeric}`;
+}
+
+function parseEventChangesSummary(changesJson) {
+  if (!changesJson) return "";
+  try {
+    const parsed = JSON.parse(changesJson);
+    if (!parsed || typeof parsed !== "object") return "";
+    const parts = Object.entries(parsed)
+      .filter(([, value]) => value !== null && value !== undefined && value !== "")
+      .slice(0, 4)
+      .map(([key, value]) => `${key}: ${value}`);
+    return parts.join(" · ");
+  } catch {
+    return "";
+  }
+}
+
+async function buildCycleActivityLogDataset({ cycleId = null, shopLocationId = null } = {}) {
+  const cycle = await resolveCycleForOverview(cycleId);
+  if (!cycle) {
+    throw new Error("No active/current cycle found");
+  }
+
+  const [locations, workers, phones, eventRows, masterRows] = await Promise.all([
+    prisma.shopLocation.findMany({
+      ...(shopLocationId ? { where: { id: Number(shopLocationId) } } : {}),
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+    }),
+    prisma.worker.findMany({
+      select: { id: true, name: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+    }),
+    prisma.phone.findMany({
+      select: { id: true, name: true },
+      orderBy: [{ id: "asc" }],
+    }),
+    prisma.cycleProductEvent.findMany({
+      where: {
+        cycleId: cycle.id,
+        ...(shopLocationId ? { shopLocationId: Number(shopLocationId) } : {}),
+      },
+      orderBy: [{ eventTime: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    }),
+    loadMasterProducts({ includeAll: true }),
+  ]);
+
+  const locationById = new Map(locations.map((row) => [row.id, row]));
+  const workerById = new Map(
+    workers.map((row) => [row.id, String(row.name || "").trim() || `#${row.id}`])
+  );
+  const phoneById = new Map(
+    phones.map((row) => [row.id, String(row.name || "").trim() || `#${row.id}`])
+  );
+  const masterByCode = new Map(
+    masterRows.map((row) => [normalizeItemCode(row.itemCode), row])
+  );
+
+  const groupedLocations = new Map();
+  for (const row of eventRows) {
+    if (!row.shopLocationId) continue;
+    const location = locationById.get(row.shopLocationId) || null;
+    const locationKey = row.shopLocationId;
+    if (!groupedLocations.has(locationKey)) {
+      groupedLocations.set(locationKey, {
+        shopLocationId: row.shopLocationId,
+        shopLocationName: location?.locationName || "",
+        shopLocationLabel: getLocationLabel(location),
+        logCount: 0,
+        matchedCount: 0,
+        mismatchCount: 0,
+        totalDiffBottles: 0,
+        totalDiffValue: 0,
+        operatorsTouched: new Set(),
+        logs: [],
+      });
+    }
+
+    const master = masterByCode.get(normalizeItemCode(row.itemCode)) || null;
+    const diffBottles = Number(row.diffBottles) || 0;
+    const mrp = Number(master?.mrp ?? 0) || 0;
+    const priceDiff = diffBottles * mrp;
+    const bucket = groupedLocations.get(locationKey);
+
+    if (row.workerId) {
+      bucket.operatorsTouched.add(Number(row.workerId));
+    }
+    bucket.logCount += 1;
+    if (row.matched === true) {
+      bucket.matchedCount += 1;
+    } else if (row.matched === false || diffBottles !== 0) {
+      bucket.mismatchCount += 1;
+    }
+    bucket.totalDiffBottles += diffBottles;
+    bucket.totalDiffValue += priceDiff;
+    bucket.logs.push({
+      id: row.id,
+      activityDate: row.activityDate ? new Date(row.activityDate).toISOString().slice(0, 10) : "",
+      eventTime: row.eventTime || row.createdAt || null,
+      eventTimeLabel: formatDateTimeIst(row.eventTime || row.createdAt),
+      shopLocationId: row.shopLocationId,
+      shopLocationName: location?.locationName || "",
+      shopLocationLabel: getLocationLabel(location),
+      operatorId: row.workerId || null,
+      operatorName:
+        row.workerId != null
+          ? workerById.get(Number(row.workerId)) || `#${row.workerId}`
+          : "Unknown",
+      phoneId: row.phoneId || null,
+      phoneName:
+        String(row.phoneName || "").trim() ||
+        (row.phoneId != null ? phoneById.get(Number(row.phoneId)) || "" : ""),
+      itemCode: row.itemCode,
+      itemName: row.itemName || "",
+      brandName: row.brandName || "",
+      packValue: row.packValue || "",
+      name: buildDisplayName(row.brandName, row.packValue, row.itemName, row.itemCode),
+      eventScope: row.eventScope,
+      eventAction: row.eventAction,
+      matched: row.matched,
+      stockBottlesAfter: Number(row.stockBottlesAfter) || 0,
+      currentStockBottles: Number(row.currentStockBottles) || 0,
+      diffBottles,
+      diffFormatted: formatSignedWholeNumber(diffBottles),
+      mrp: master?.mrp ?? null,
+      priceDiff,
+      priceDiffFormatted: toSignedCurrency(priceDiff),
+      changeSummary: parseEventChangesSummary(row.changesJson),
+    });
+  }
+
+  const locationsData = Array.from(groupedLocations.values())
+    .sort((a, b) => {
+      const sortA = locationById.get(a.shopLocationId)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      const sortB = locationById.get(b.shopLocationId)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      if (sortA !== sortB) return sortA - sortB;
+      return String(a.shopLocationName || "").localeCompare(String(b.shopLocationName || ""));
+    })
+    .map((locationRow) => ({
+      shopLocationId: locationRow.shopLocationId,
+      shopLocationName: locationRow.shopLocationName,
+      shopLocationLabel: locationRow.shopLocationLabel,
+      logCount: locationRow.logCount,
+      operatorsTouched: locationRow.operatorsTouched.size,
+      matchedCount: locationRow.matchedCount,
+      mismatchCount: locationRow.mismatchCount,
+      totalDiffBottles: locationRow.totalDiffBottles,
+      totalDiffValue: locationRow.totalDiffValue,
+      totalDiffValueFormatted: toSignedCurrency(locationRow.totalDiffValue),
+      logs: locationRow.logs,
+    }));
+
+  const summary = locationsData.reduce(
+    (acc, locationRow) => {
+      acc.locationCount += 1;
+      acc.logCount += locationRow.logCount;
+      acc.operatorsTouched += locationRow.operatorsTouched;
+      acc.matchedCount += locationRow.matchedCount;
+      acc.mismatchCount += locationRow.mismatchCount;
+      acc.totalDiffBottles += locationRow.totalDiffBottles;
+      acc.totalDiffValue += locationRow.totalDiffValue;
+      return acc;
+    },
+    {
+      locationCount: 0,
+      logCount: 0,
+      operatorsTouched: 0,
+      matchedCount: 0,
+      mismatchCount: 0,
+      totalDiffBottles: 0,
+      totalDiffValue: 0,
+    }
+  );
+
+  return {
+    cycle: {
+      id: cycle.id,
+      sno: cycle.sno ?? null,
+      status: cycle.status,
+      startDate: cycle.startDate,
+      endDate: cycle.endDate,
+      cycleDate: getCycleDateLabel(cycle),
+      currentCycle: cycle.status === "active",
+    },
+    summary: {
+      ...summary,
+      totalDiffValueFormatted: toSignedCurrency(summary.totalDiffValue),
+    },
+    locations: locationsData,
+  };
 }
 
 function toPrintJobToken(value) {
@@ -2526,6 +3296,69 @@ router.get("/finished/progress", async (req, res) => {
   });
 });
 
+router.get("/overview", async (req, res) => {
+  const cycleId = parseOptionalPositiveInt(req.query.cycleId);
+  const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
+
+  try {
+    const data = await buildCycleStockOverviewDataset({ cycleId, shopLocationId });
+    return res.json({
+      success: true,
+      ...data,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "No active/current cycle found") {
+      return res.status(404).json({ success: false, message: error.message });
+    }
+    return res.status(500).json({
+      success: false,
+      message: error instanceof Error ? error.message : "Failed to build stock overview",
+    });
+  }
+});
+
+router.get("/overview/operators", async (req, res) => {
+  const cycleId = parseOptionalPositiveInt(req.query.cycleId);
+  const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
+
+  try {
+    const data = await buildCycleOperatorOverviewDataset({ cycleId, shopLocationId });
+    return res.json({
+      success: true,
+      ...data,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "No active/current cycle found") {
+      return res.status(404).json({ success: false, message: error.message });
+    }
+    return res.status(500).json({
+      success: false,
+      message: error instanceof Error ? error.message : "Failed to build operator overview",
+    });
+  }
+});
+
+router.get("/overview/activity-logs", async (req, res) => {
+  const cycleId = parseOptionalPositiveInt(req.query.cycleId);
+  const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
+
+  try {
+    const data = await buildCycleActivityLogDataset({ cycleId, shopLocationId });
+    return res.json({
+      success: true,
+      ...data,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "No active/current cycle found") {
+      return res.status(404).json({ success: false, message: error.message });
+    }
+    return res.status(500).json({
+      success: false,
+      message: error instanceof Error ? error.message : "Failed to build activity logs",
+    });
+  }
+});
+
 router.get("/verify/mismatched-finished", async (req, res) => {
   const operatorId = parseOptionalPositiveInt(req.query.operatorId);
   const cycleId = parseOptionalPositiveInt(req.query.cycleId);
@@ -2677,7 +3510,7 @@ router.get("/verify/unchecked-finished", async (req, res) => {
   if (!location) {
     return res.status(404).json({ success: false, message: "Shop location not found" });
   }
-  const eligibleMasterRows = masterRows.filter((row) => hasMatchingLocationStockColumn(row, location));
+  const eligibleMasterRows = masterRows.filter((row) => hasPositiveStockForLocation(row, location));
 
   const scannedCodeSet = new Set(
     finishedRows

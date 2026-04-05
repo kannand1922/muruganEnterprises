@@ -39,9 +39,31 @@ function formatTimestampIST(dateValue) {
   });
 }
 
+function formatAgeLabel(ageMs) {
+  const safeAgeMs = Math.max(0, Number(ageMs) || 0);
+  const totalMinutes = Math.floor(safeAgeMs / 60000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) {
+    if (hours > 0) return `${days} day${days === 1 ? "" : "s"} ${hours} hour${hours === 1 ? "" : "s"} ago`;
+    return `${days} day${days === 1 ? "" : "s"} ago`;
+  }
+  if (hours > 0) {
+    if (minutes > 0) return `${hours} hour${hours === 1 ? "" : "s"} ${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+    return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  }
+  if (minutes > 0) {
+    return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  }
+  return "just now";
+}
+
 module.exports = {
   DEFAULT_MASTER_MAX_AGE_MINUTES,
   MASTER_MAX_AGE_FILE,
   getMasterMaxAgeMinutes,
   formatTimestampIST,
+  formatAgeLabel,
 };
