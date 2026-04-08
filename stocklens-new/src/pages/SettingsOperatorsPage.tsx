@@ -13,19 +13,24 @@ import {
   IonModal,
   IonNote,
   IonPage,
+  IonSelect,
+  IonSelectOption,
   IonTextarea,
   IonText,
   IonToggle,
   useIonToast,
 } from "@ionic/react";
 import { type ChangeEvent, useEffect, useState } from "react";
-import { createOutline, eyeOutline, trashOutline } from "ionicons/icons";
+import { eyeOutline } from "ionicons/icons";
 import { AppTopBar } from "../components/common/AppTopBar";
 import {
+  createDesignation,
+  createWorkLocation,
   createWorker,
-  deleteWorker,
+  getDesignations,
+  getWorkLocations,
   getWorkers,
-  updateWorker,
+  type WorkerLookupRow,
   type Worker,
   type WorkerPayload,
 } from "../api/metaApi";
@@ -333,16 +338,25 @@ export function SettingsOperatorsPage() {
   const [presentToast] = useIonToast();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
   const [viewingWorker, setViewingWorker] = useState<Worker | null>(null);
   const [rows, setRows] = useState<Worker[]>([]);
+  const [designations, setDesignations] = useState<WorkerLookupRow[]>([]);
+  const [workLocations, setWorkLocations] = useState<WorkerLookupRow[]>([]);
+  const [newDesignationName, setNewDesignationName] = useState("");
+  const [newWorkLocationName, setNewWorkLocationName] = useState("");
   const [form, setForm] = useState<WorkerForm>(EMPTY_FORM);
 
   async function loadRows() {
     setLoading(true);
     try {
-      const list = await getWorkers();
+      const [list, designationRows, workLocationRows] = await Promise.all([
+        getWorkers(),
+        getDesignations(false),
+        getWorkLocations(false),
+      ]);
       setRows(list);
+      setDesignations(designationRows);
+      setWorkLocations(workLocationRows);
     } catch (error) {
       presentToast({
         message: error instanceof Error ? error.message : "Failed to load operators",
@@ -354,23 +368,61 @@ export function SettingsOperatorsPage() {
     }
   }
 
+  async function handleAddDesignation() {
+    const name = newDesignationName.trim();
+    if (!name) {
+      presentToast({ message: "Designation name is required", color: "warning", duration: 1600 });
+      return;
+    }
+    try {
+      await createDesignation({ name, active: true });
+      setNewDesignationName("");
+      const rows = await getDesignations(false);
+      setDesignations(rows);
+      setForm((current) => ({ ...current, designationName: name }));
+      presentToast({ message: "Designation added", color: "success", duration: 1400 });
+    } catch (error) {
+      presentToast({
+        message: error instanceof Error ? error.message : "Failed to add designation",
+        color: "danger",
+        duration: 1800,
+      });
+    }
+  }
+
+  async function handleAddWorkLocation() {
+    const name = newWorkLocationName.trim();
+    if (!name) {
+      presentToast({ message: "Work location name is required", color: "warning", duration: 1600 });
+      return;
+    }
+    try {
+      await createWorkLocation({ name, active: true });
+      setNewWorkLocationName("");
+      const rows = await getWorkLocations(false);
+      setWorkLocations(rows);
+      setForm((current) => ({ ...current, workLocationName: name }));
+      presentToast({ message: "Work location added", color: "success", duration: 1400 });
+    } catch (error) {
+      presentToast({
+        message: error instanceof Error ? error.message : "Failed to add work location",
+        color: "danger",
+        duration: 1800,
+      });
+    }
+  }
+
   useEffect(() => {
     void loadRows();
   }, []);
 
   function resetForm() {
-    setEditingId(null);
     setForm({
       ...EMPTY_FORM,
       phoneNumbers: [createPhoneRow({ label: "Primary", isPrimary: true })],
       otherProofs: [createDocumentRow("otherProof")],
       additionalDetails: [createDocumentRow("additionalDetail")],
     });
-  }
-
-  function startEdit(row: Worker) {
-    setEditingId(row.id);
-    setForm(normalizeWorkerToForm(row));
   }
 
   async function handleAssetSelect(
@@ -437,13 +489,8 @@ export function SettingsOperatorsPage() {
     const payload = buildPayload(form);
     setSaving(true);
     try {
-      if (editingId) {
-        await updateWorker(editingId, payload);
-        presentToast({ message: "Operator updated", color: "success", duration: 1500 });
-      } else {
-        await createWorker(payload);
-        presentToast({ message: "Operator created", color: "success", duration: 1500 });
-      }
+      await createWorker(payload);
+      presentToast({ message: "Operator created", color: "success", duration: 1500 });
       resetForm();
       await loadRows();
     } catch (error) {
@@ -454,21 +501,6 @@ export function SettingsOperatorsPage() {
       });
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function onDelete(id: number) {
-    try {
-      await deleteWorker(id);
-      presentToast({ message: "Operator removed", color: "success", duration: 1500 });
-      if (editingId === id) resetForm();
-      await loadRows();
-    } catch (error) {
-      presentToast({
-        message: error instanceof Error ? error.message : "Failed to delete operator",
-        color: "danger",
-        duration: 1800,
-      });
     }
   }
 
@@ -496,27 +528,10 @@ export function SettingsOperatorsPage() {
                       <IonButton
                         size="small"
                         fill="clear"
-                        aria-label={`Edit ${row.name}`}
-                        onClick={() => startEdit(row)}
-                      >
-                        <IonIcon icon={createOutline} />
-                      </IonButton>
-                      <IonButton
-                        size="small"
-                        fill="clear"
                         aria-label={`View ${row.name}`}
                         onClick={() => setViewingWorker(row)}
                       >
                         <IonIcon icon={eyeOutline} />
-                      </IonButton>
-                      <IonButton
-                        size="small"
-                        color="danger"
-                        fill="clear"
-                        aria-label={`Delete ${row.name}`}
-                        onClick={() => onDelete(row.id)}
-                      >
-                        <IonIcon icon={trashOutline} />
                       </IonButton>
                     </div>
                   </IonItem>
@@ -528,7 +543,7 @@ export function SettingsOperatorsPage() {
 
         <IonCard className="settings-config-card">
           <IonCardHeader>
-            <IonCardTitle>{editingId ? "Update Operator Profile" : "Create Operator Profile"}</IonCardTitle>
+            <IonCardTitle>Create Operator Profile</IonCardTitle>
           </IonCardHeader>
           <IonCardContent className="operator-profile-form">
             <div className="operator-form-section">
@@ -546,20 +561,55 @@ export function SettingsOperatorsPage() {
               </IonItem>
               <IonItem>
                 <IonLabel position="stacked">Designation</IonLabel>
-                <IonInput
+                <IonSelect
                   value={form.designationName}
-                  onIonInput={(e) => setForm((s) => ({ ...s, designationName: e.detail.value || "" }))}
-                  placeholder="Type a designation"
-                />
+                  onIonChange={(e) => setForm((s) => ({ ...s, designationName: String(e.detail.value || "") }))}
+                  interface="popover"
+                  placeholder="Select designation"
+                >
+                  {designations.map((row) => (
+                    <IonSelectOption key={row.id} value={row.name}>
+                      {row.name}
+                    </IonSelectOption>
+                  ))}
+                </IonSelect>
               </IonItem>
+              <div className="settings-actions settings-actions-inline">
+                <IonInput
+                  value={newDesignationName}
+                  onIonInput={(e) => setNewDesignationName(e.detail.value || "")}
+                  placeholder="Add new designation"
+                />
+                <IonButton size="small" fill="outline" onClick={() => void handleAddDesignation()}>
+                  Add
+                </IonButton>
+              </div>
               <IonItem>
                 <IonLabel position="stacked">Work Location</IonLabel>
-                <IonInput
+                <IonSelect
                   value={form.workLocationName}
-                  onIonInput={(e) => setForm((s) => ({ ...s, workLocationName: e.detail.value || "" }))}
+                  onIonChange={(e) => setForm((s) => ({ ...s, workLocationName: String(e.detail.value || "") }))}
+                  interface="popover"
                   placeholder="Optional"
-                />
+                >
+                  <IonSelectOption value="">None</IonSelectOption>
+                  {workLocations.map((row) => (
+                    <IonSelectOption key={row.id} value={row.name}>
+                      {row.name}
+                    </IonSelectOption>
+                  ))}
+                </IonSelect>
               </IonItem>
+              <div className="settings-actions settings-actions-inline">
+                <IonInput
+                  value={newWorkLocationName}
+                  onIonInput={(e) => setNewWorkLocationName(e.detail.value || "")}
+                  placeholder="Add new work location"
+                />
+                <IonButton size="small" fill="outline" onClick={() => void handleAddWorkLocation()}>
+                  Add
+                </IonButton>
+              </div>
               <IonItem>
                 <IonLabel position="stacked">Recommended By</IonLabel>
                 <IonInput
@@ -567,15 +617,13 @@ export function SettingsOperatorsPage() {
                   onIonInput={(e) => setForm((s) => ({ ...s, recommendedBy: e.detail.value || "" }))}
                 />
               </IonItem>
-              {editingId ? (
-                <IonItem>
-                  <IonLabel>Active</IonLabel>
-                  <IonToggle
-                    checked={form.active}
-                    onIonChange={(e) => setForm((s) => ({ ...s, active: e.detail.checked }))}
-                  />
-                </IonItem>
-              ) : null}
+              <IonItem>
+                <IonLabel>Active</IonLabel>
+                <IonToggle
+                  checked={form.active}
+                  onIonChange={(e) => setForm((s) => ({ ...s, active: e.detail.checked }))}
+                />
+              </IonItem>
               <div className="operator-upload-card">
                 <IonText>
                   <h4>Profile Image</h4>
@@ -953,7 +1001,7 @@ export function SettingsOperatorsPage() {
 
             <div className="settings-actions settings-actions-inline">
               <IonButton onClick={onSave} disabled={saving}>
-                {saving ? "Saving..." : editingId ? "Update Operator" : "Create Operator"}
+                {saving ? "Saving..." : "Create Operator"}
               </IonButton>
               <IonButton fill="outline" onClick={resetForm}>
                 Clear

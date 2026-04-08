@@ -34,7 +34,7 @@ function migrateLegacyBaseUrl(value: string) {
     normalized === "http://localhost:3000/api" ||
     normalized === "http://localhost:3010/api"
   ) {
-    return "http://localhost:3010/new/api";
+    return "http://localhost:4000/new/api";
   }
   return normalized;
 }

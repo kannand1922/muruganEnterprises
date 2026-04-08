@@ -1,3 +1,4 @@
+import axios from "axios";
 import type {
   BestSellingProduct,
   CentralDashboardResponse,
@@ -6,28 +7,37 @@ import type {
   CentralShopEndpoint,
   MasterProduct,
   Worker,
+  WorkerLookupRow,
   WorkerPayload,
 } from "./types";
-import { getApiBaseUrl } from "./config/env";
+import { centralApiClient } from "./centralApiClient";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${getApiBaseUrl()}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      ...(init?.headers || {}),
-    },
-    ...init,
-  });
-
-  const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!response.ok) {
-    throw new Error(data?.message || `Request failed with status ${response.status}`);
+  try {
+    const response = await centralApiClient.request<T>({
+      url: path,
+      method: init?.method as
+        | "GET"
+        | "POST"
+        | "PUT"
+        | "PATCH"
+        | "DELETE"
+        | "HEAD"
+        | "OPTIONS"
+        | undefined,
+      headers: init?.headers as Record<string, string> | undefined,
+      data: init?.body,
+    });
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const message =
+        (error.response?.data as { message?: string } | undefined)?.message ||
+        `Request failed with status ${error.response?.status || 500}`;
+      throw new Error(message);
+    }
+    throw error;
   }
-
-  return data as T;
 }
 
 export function getCentralDashboard(params?: {
@@ -141,6 +151,42 @@ export function deleteCentralWorker(id: number) {
   return request<{ success: boolean; message: string }>(`/meta/central/workers/${id}`, {
     method: "DELETE",
   });
+}
+
+export async function getCentralDesignations(includeInactive = true) {
+  const result = await request<{ success: boolean; count: number; rows: WorkerLookupRow[] }>(
+    `/meta/central/designations${includeInactive ? "?includeInactive=1" : ""}`
+  );
+  return result.rows;
+}
+
+export async function createCentralDesignation(payload: { name: string; active?: boolean }) {
+  const result = await request<{ success: boolean; data: WorkerLookupRow }>(
+    "/meta/central/designations",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+  return result.data;
+}
+
+export async function getCentralWorkLocations(includeInactive = true) {
+  const result = await request<{ success: boolean; count: number; rows: WorkerLookupRow[] }>(
+    `/meta/central/work-locations${includeInactive ? "?includeInactive=1" : ""}`
+  );
+  return result.rows;
+}
+
+export async function createCentralWorkLocation(payload: { name: string; active?: boolean }) {
+  const result = await request<{ success: boolean; data: WorkerLookupRow }>(
+    "/meta/central/work-locations",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+  return result.data;
 }
 
 export async function getCentralBestSelling(includeInactive = true) {

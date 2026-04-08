@@ -122,6 +122,14 @@ export type WorkerPayload = {
   active?: boolean;
 };
 
+export type WorkerLookupRow = {
+  id: number;
+  name: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type Printer = {
   id: number;
   name: string;
@@ -416,6 +424,30 @@ export async function updateWorker(
 
 export async function deleteWorker(id: number) {
   return apiDelete<{ success: boolean; message?: string }>(`/meta/workers/${id}`);
+}
+
+export async function getDesignations(includeInactive = false) {
+  const result = await apiGet<ApiListEnvelope<WorkerLookupRow>>(
+    `/meta/designations${includeInactive ? "?includeInactive=1" : ""}`
+  );
+  return result.rows;
+}
+
+export async function createDesignation(payload: { name: string; active?: boolean }) {
+  const result = await apiPost<ApiEnvelope<WorkerLookupRow>>("/meta/designations", payload);
+  return result.data;
+}
+
+export async function getWorkLocations(includeInactive = false) {
+  const result = await apiGet<ApiListEnvelope<WorkerLookupRow>>(
+    `/meta/work-locations${includeInactive ? "?includeInactive=1" : ""}`
+  );
+  return result.rows;
+}
+
+export async function createWorkLocation(payload: { name: string; active?: boolean }) {
+  const result = await apiPost<ApiEnvelope<WorkerLookupRow>>("/meta/work-locations", payload);
+  return result.data;
 }
 
 export async function getPhones() {

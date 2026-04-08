@@ -1,6 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const net = require("net");
+const crypto = require("crypto");
 const { prisma } = require("../prisma");
 const { centralPrisma } = require("../centralPrisma");
 const {
@@ -32,6 +33,8 @@ const {
   readCentralCatalog,
   normalizeOperators,
   normalizeBestSellers,
+  normalizeDesignations,
+  normalizeWorkLocations,
   syncCatalogToLocal,
   syncCentralCatalog,
   getCentralSyncState,
@@ -43,6 +46,131 @@ const CENTRAL_SYNC_OPERATORS_ENABLED_KEY = "central_sync_operators_enabled";
 const CENTRAL_SYNC_BEST_SELLING_ENABLED_KEY = "central_sync_best_selling_enabled";
 const CENTRAL_REVERSE_SYNC_OPERATORS_ENABLED_KEY = "central_reverse_sync_operators_enabled";
 const CENTRAL_REVERSE_SYNC_BEST_SELLING_ENABLED_KEY = "central_reverse_sync_best_selling_enabled";
+const CENTRAL_SHARED_KEY = String(process.env.CENTRAL_SHARED_KEY || "7429513860174259").trim();
+const CENTRAL_TOKEN_PURPOSE = "central-route-access";
+const CENTRAL_TOKEN_MAX_AGE_SECONDS = Number(process.env.CENTRAL_TOKEN_MAX_AGE_SECONDS || 600);
+
+function normalizeIpAddress(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("::ffff:")) {
+    return raw.slice(7);
+  }
+  if (raw === "::1") {
+    return "127.0.0.1";
+  }
+  return raw;
+}
+
+function isPrivateOrLocalIp(ipValue) {
+  const ip = normalizeIpAddress(ipValue);
+  if (!ip) return false;
+  if (ip === "127.0.0.1") return true;
+  if (ip.startsWith("10.")) return true;
+  if (ip.startsWith("192.168.")) return true;
+  if (ip.startsWith("169.254.")) return true;
+  const parts = ip.split(".").map((part) => Number(part));
+  if (parts.length === 4 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function toBase64Url(buffer) {
+  return Buffer.from(buffer)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function fromBase64Url(value) {
+  const input = String(value || "");
+  const padded = input + "=".repeat((4 - (input.length % 4)) % 4);
+  return Buffer.from(padded.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+}
+
+function xorBufferWithKey(buffer, keyText) {
+  const key = Buffer.from(String(keyText || ""), "utf8");
+  if (!key.length) {
+    throw new Error("CENTRAL_SHARED_KEY must not be empty");
+  }
+  const output = Buffer.alloc(buffer.length);
+  for (let index = 0; index < buffer.length; index += 1) {
+    output[index] = buffer[index] ^ key[index % key.length];
+  }
+  return output;
+}
+
+function buildCentralAccessToken() {
+  const payload = {
+    purpose: CENTRAL_TOKEN_PURPOSE,
+    ts: Math.floor(Date.now() / 1000),
+    nonce: crypto.randomBytes(8).toString("hex"),
+  };
+  const plaintext = Buffer.from(JSON.stringify(payload), "utf8");
+  const encrypted = xorBufferWithKey(plaintext, CENTRAL_SHARED_KEY);
+  return toBase64Url(encrypted);
+}
+
+function decodeCentralAccessToken(token) {
+  try {
+    const encrypted = fromBase64Url(token);
+    const plaintext = xorBufferWithKey(encrypted, CENTRAL_SHARED_KEY);
+    const payload = JSON.parse(plaintext.toString("utf8"));
+    const ts = Number(payload?.ts);
+    if (payload?.purpose !== CENTRAL_TOKEN_PURPOSE) {
+      return { ok: false, message: "Invalid token purpose" };
+    }
+    if (!Number.isFinite(ts)) {
+      return { ok: false, message: "Invalid token timestamp" };
+    }
+    const age = Math.abs(Math.floor(Date.now() / 1000) - Math.trunc(ts));
+    if (age > CENTRAL_TOKEN_MAX_AGE_SECONDS) {
+      return { ok: false, message: "Token expired" };
+    }
+    return { ok: true, payload };
+  } catch (error) {
+    return { ok: false, message: "Invalid auth token" };
+  }
+}
+
+function extractBearerToken(headerValue) {
+  const raw = String(headerValue || "").trim();
+  if (!raw) return "";
+  const parts = raw.split(/\s+/);
+  if (parts.length !== 2 || parts[0].toLowerCase() !== "bearer") {
+    return "";
+  }
+  return parts[1];
+}
+
+function requireCentralAccessToken(req, res, next) {
+  const sourceIp = normalizeIpAddress(req.socket?.remoteAddress);
+  if (isPrivateOrLocalIp(sourceIp)) {
+    return next();
+  }
+
+  const token = extractBearerToken(req.headers.authorization);
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      message: "Missing central auth token",
+    });
+  }
+
+  const decoded = decodeCentralAccessToken(token);
+  if (!decoded.ok) {
+    return res.status(401).json({
+      success: false,
+      message: decoded.message || "Invalid central auth token",
+    });
+  }
+
+  return next();
+}
 
 function toNullableText(value) {
   if (value === undefined || value === null) return null;
@@ -284,7 +412,6 @@ function pickOverviewMetrics(summary = null) {
     scannedCount: Number(summary.scannedCount) || 0,
     trackedCount: Number(summary.trackedCount) || 0,
     matchedCount: Number(summary.matchedCount) || 0,
-    unmatchedCount: Number(summary.unmatchedCount) || 0,
     uncheckedCount: Number(summary.uncheckedCount) || 0,
     mismatchCount: Number(summary.mismatchCount) || 0,
     totalDiffBottles: Number(summary.totalDiffBottles) || 0,
@@ -313,6 +440,18 @@ function summarizeRemoteOverviewForDashboard(endpoint, overview) {
   const cycleByLocation = new Map(cycleLocations.map((row) => [Number(row.shopLocationId), row]));
   const todayByLocation = new Map(todayLocations.map((row) => [Number(row.shopLocationId), row]));
   const locationIds = new Set([...cycleByLocation.keys(), ...todayByLocation.keys()]);
+  const nilByLocation = Array.isArray(overview?.nilStock?.byLocation)
+    ? overview.nilStock.byLocation.map((row) => ({
+        locationId: Number(row?.locationId) || 0,
+        label: String(row?.label || "").trim() || "LOCATION",
+        count: Number(row?.count) || 0,
+      }))
+    : [];
+  const nilTotalCountFromLocations = nilByLocation.reduce((sum, row) => sum + row.count, 0);
+  const nilTotalCount = Number(overview?.nilStock?.totalCount);
+  const safeNilTotalCount = Number.isFinite(nilTotalCount)
+    ? nilTotalCount
+    : Number(overview?.nilCount) || nilTotalCountFromLocations;
 
   return {
     id: endpoint.id,
@@ -330,6 +469,12 @@ function summarizeRemoteOverviewForDashboard(endpoint, overview) {
           summary: pickOverviewMetrics(overview.today.summary),
         }
       : null,
+    nilStock: {
+      sourceLocationId: Number(overview?.nilStock?.sourceLocationId) || null,
+      sourceLocationLabel: String(overview?.nilStock?.sourceLocationLabel || "").trim() || "",
+      totalCount: safeNilTotalCount,
+      byLocation: nilByLocation,
+    },
     locations: Array.from(locationIds)
       .map((locationId) => mergeLocationOverview(cycleByLocation.get(locationId), todayByLocation.get(locationId)))
       .sort((a, b) => String(a.shopLocationLabel || "").localeCompare(String(b.shopLocationLabel || ""))),
@@ -468,6 +613,12 @@ function createOfflineDashboardShop(endpoint, error) {
     cycle: null,
     cycleSummary: null,
     today: null,
+    nilStock: {
+      sourceLocationId: null,
+      sourceLocationLabel: "",
+      totalCount: 0,
+      byLocation: [],
+    },
     locations: [],
     error: error instanceof Error ? error.message : String(error || "Unable to reach shop"),
   };
@@ -478,11 +629,11 @@ function aggregateDashboardShops(shops) {
     shopCount: shops.length,
     onlineShopCount: 0,
     offlineShopCount: 0,
+    nilStockCount: 0,
     cycle: {
       scannedCount: 0,
       trackedCount: 0,
       matchedCount: 0,
-      unmatchedCount: 0,
       uncheckedCount: 0,
       mismatchCount: 0,
       totalDiffBottles: 0,
@@ -495,7 +646,6 @@ function aggregateDashboardShops(shops) {
       scannedCount: 0,
       trackedCount: 0,
       matchedCount: 0,
-      unmatchedCount: 0,
       uncheckedCount: 0,
       mismatchCount: 0,
       totalDiffBottles: 0,
@@ -508,11 +658,11 @@ function aggregateDashboardShops(shops) {
   for (const shop of shops) {
     if (shop.status === "online") {
       totals.onlineShopCount += 1;
+      totals.nilStockCount += Number(shop.nilStock?.totalCount) || 0;
       if (shop.cycleSummary) {
         totals.cycle.scannedCount += shop.cycleSummary.scannedCount;
         totals.cycle.trackedCount += shop.cycleSummary.trackedCount;
         totals.cycle.matchedCount += shop.cycleSummary.matchedCount;
-        totals.cycle.unmatchedCount += shop.cycleSummary.unmatchedCount;
         totals.cycle.uncheckedCount += shop.cycleSummary.uncheckedCount;
         totals.cycle.mismatchCount += shop.cycleSummary.mismatchCount;
         totals.cycle.totalDiffBottles += shop.cycleSummary.totalDiffBottles;
@@ -525,7 +675,6 @@ function aggregateDashboardShops(shops) {
         totals.today.scannedCount += shop.today.summary.scannedCount;
         totals.today.trackedCount += shop.today.summary.trackedCount;
         totals.today.matchedCount += shop.today.summary.matchedCount;
-        totals.today.unmatchedCount += shop.today.summary.unmatchedCount;
         totals.today.uncheckedCount += shop.today.summary.uncheckedCount;
         totals.today.mismatchCount += shop.today.summary.mismatchCount;
         totals.today.totalDiffBottles += shop.today.summary.totalDiffBottles;
@@ -544,11 +693,15 @@ function aggregateDashboardShops(shops) {
 }
 
 async function pushCentralCatalogToShops(resource, options = {}) {
-  const safeResource = resource === "bestSellers" ? "bestSellers" : "operators";
+  const safeResource = ["operators", "bestSellers", "designations", "workLocations"].includes(resource)
+    ? resource
+    : "operators";
   const reverseSyncSettings = await getCentralReverseSyncSettings();
   if (
     (safeResource === "operators" && !reverseSyncSettings.reverseSyncOperatorsEnabled) ||
-    (safeResource === "bestSellers" && !reverseSyncSettings.reverseSyncBestSellingEnabled)
+    (safeResource === "bestSellers" && !reverseSyncSettings.reverseSyncBestSellingEnabled) ||
+    ((safeResource === "designations" || safeResource === "workLocations") &&
+      !reverseSyncSettings.reverseSyncOperatorsEnabled)
   ) {
     return {
       resource: safeResource,
@@ -570,6 +723,14 @@ async function pushCentralCatalogToShops(resource, options = {}) {
   const payload = {
     operators: safeResource === "operators" ? normalizeOperators(catalog.operators) : undefined,
     bestSellers: safeResource === "bestSellers" ? normalizeBestSellers(catalog.bestSellers) : undefined,
+    designations:
+      safeResource === "designations"
+        ? normalizeDesignations(catalog.designations || [])
+        : undefined,
+    workLocations:
+      safeResource === "workLocations"
+        ? normalizeWorkLocations(catalog.workLocations || [])
+        : undefined,
     source: "central",
     resource: safeResource,
     trigger: options.trigger || "central_update",
@@ -582,6 +743,9 @@ async function pushCentralCatalogToShops(resource, options = {}) {
           buildRemoteApiUrl(endpoint.baseUrl, "/api/meta/central-sync/apply"),
           {
             method: "POST",
+            headers: {
+              authorization: `Bearer ${buildCentralAccessToken()}`,
+            },
             body: JSON.stringify(payload),
           }
         );
@@ -621,6 +785,9 @@ async function forwardCatalogWriteToCentral(settings, path, method, payload = nu
 
   return fetchJsonWithTimeout(buildRemoteApiUrl(settings.centralBaseUrl, path), {
     method,
+    headers: {
+      authorization: `Bearer ${buildCentralAccessToken()}`,
+    },
     ...(payload == null ? {} : { body: JSON.stringify(payload) }),
   });
 }
@@ -668,6 +835,18 @@ function mapPhonePayload(body, existing = null) {
       body.lowStockNotificationsEnabled,
       existing?.lowStockNotificationsEnabled ?? true
     ),
+  };
+}
+
+function mapLookupPayload(body = {}, existing = null) {
+  return {
+    name: String(body.name ?? existing?.name ?? "").trim(),
+    active:
+      body.active === undefined
+        ? existing?.active === undefined
+          ? true
+          : Boolean(existing.active)
+        : Boolean(body.active),
   };
 }
 
@@ -1619,15 +1798,19 @@ router.get("/central-sync", async (req, res) => {
 router.post("/central-sync/run", async (req, res) => {
   try {
     const result = await syncCentralCatalog("manual_api");
-    const [operatorPush, bestSellerPush] = await Promise.all([
+    const [operatorPush, bestSellerPush, designationPush, workLocationPush] = await Promise.all([
       pushCentralCatalogToShops("operators", { trigger: "manual_api" }),
       pushCentralCatalogToShops("bestSellers", { trigger: "manual_api" }),
+      pushCentralCatalogToShops("designations", { trigger: "manual_api" }),
+      pushCentralCatalogToShops("workLocations", { trigger: "manual_api" }),
     ]);
     return res.json({
       ...result,
       reverseSync: {
         operators: operatorPush,
         bestSellers: bestSellerPush,
+        designations: designationPush,
+        workLocations: workLocationPush,
       },
     });
   } catch (error) {
@@ -1643,6 +1826,8 @@ router.get("/sync-settings", async (req, res) => {
   const data = await getCatalogSyncSettings();
   return res.json({ success: true, data });
 });
+
+router.use("/central", requireCentralAccessToken);
 
 router.put("/sync-settings", async (req, res) => {
   const rawCentralBaseUrl = req.body?.centralBaseUrl;
@@ -1672,14 +1857,18 @@ router.put("/central/reverse-sync-settings", async (req, res) => {
   return res.json({ success: true, data });
 });
 
-router.post("/central-sync/apply", async (req, res) => {
+router.post("/central-sync/apply", requireCentralAccessToken, async (req, res) => {
   const settings = await getCatalogSyncSettings();
   const hasOperators = Array.isArray(req.body?.operators);
   const hasBestSellers = Array.isArray(req.body?.bestSellers);
+  const hasDesignations = Array.isArray(req.body?.designations);
+  const hasWorkLocations = Array.isArray(req.body?.workLocations);
   const applyOperators = hasOperators && settings.syncOperatorsWithCentral;
   const applyBestSellers = hasBestSellers && settings.syncBestSellingWithCentral;
+  const applyDesignations = hasDesignations && settings.syncOperatorsWithCentral;
+  const applyWorkLocations = hasWorkLocations && settings.syncOperatorsWithCentral;
 
-  if (!applyOperators && !applyBestSellers) {
+  if (!applyOperators && !applyBestSellers && !applyDesignations && !applyWorkLocations) {
     return res.json({
       success: true,
       skipped: true,
@@ -1692,10 +1881,14 @@ router.post("/central-sync/apply", async (req, res) => {
     {
       operators: hasOperators ? req.body.operators : [],
       bestSellers: hasBestSellers ? req.body.bestSellers : [],
+      designations: hasDesignations ? req.body.designations : [],
+      workLocations: hasWorkLocations ? req.body.workLocations : [],
     },
     {
       syncOperators: applyOperators,
       syncBestSellers: applyBestSellers,
+      syncDesignations: applyDesignations,
+      syncWorkLocations: applyWorkLocations,
     }
   );
 
@@ -1818,6 +2011,172 @@ router.delete("/central/shops/:id", async (req, res) => {
       return res.status(404).json({ success: false, message: "Shop not found" });
     }
     return res.status(500).json({ success: false, message: "Failed to delete shop" });
+  }
+});
+
+router.get("/central/designations", async (req, res) => {
+  const includeInactive = parseIncludeInactive(req.query.includeInactive);
+  const rows = await centralPrisma.operatorDesignation.findMany({
+    where: includeInactive ? undefined : { active: true },
+    orderBy: [{ name: "asc" }, { id: "asc" }],
+  });
+  return res.json({ success: true, count: rows.length, rows });
+});
+
+router.post("/central/designations", async (req, res) => {
+  const payload = mapLookupPayload(req.body || {});
+  if (!payload.name) {
+    return res.status(400).json({ success: false, message: "name is required" });
+  }
+
+  const existing = await centralPrisma.operatorDesignation.findUnique({ where: { name: payload.name } });
+  if (existing) {
+    return res.status(409).json({ success: false, message: "Designation already exists" });
+  }
+
+  const row = await centralPrisma.operatorDesignation.create({ data: payload });
+  const sync = await syncCentralCatalog("central_designation_create");
+  const reverseSync = await pushCentralCatalogToShops("designations", {
+    trigger: "central_designation_create",
+  });
+  return res.json({ success: true, data: row, sync: sync.summary, reverseSync });
+});
+
+router.put("/central/designations/:id", async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ success: false, message: "Invalid designation id" });
+  }
+
+  const existing = await centralPrisma.operatorDesignation.findUnique({ where: { id } });
+  if (!existing) {
+    return res.status(404).json({ success: false, message: "Designation not found" });
+  }
+
+  const payload = mapLookupPayload(req.body || {}, existing);
+  if (!payload.name) {
+    return res.status(400).json({ success: false, message: "name is required" });
+  }
+
+  const duplicate = await centralPrisma.operatorDesignation.findUnique({ where: { name: payload.name } });
+  if (duplicate && duplicate.id !== id) {
+    return res.status(409).json({ success: false, message: "Designation already exists" });
+  }
+
+  const row = await centralPrisma.operatorDesignation.update({ where: { id }, data: payload });
+  const sync = await syncCentralCatalog("central_designation_update");
+  const reverseSync = await pushCentralCatalogToShops("designations", {
+    trigger: "central_designation_update",
+  });
+  return res.json({ success: true, data: row, sync: sync.summary, reverseSync });
+});
+
+router.delete("/central/designations/:id", async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ success: false, message: "Invalid designation id" });
+  }
+
+  try {
+    await centralPrisma.operatorDesignation.delete({ where: { id } });
+    const sync = await syncCentralCatalog("central_designation_delete");
+    const reverseSync = await pushCentralCatalogToShops("designations", {
+      trigger: "central_designation_delete",
+    });
+    return res.json({
+      success: true,
+      message: "Designation deleted",
+      sync: sync.summary,
+      reverseSync,
+    });
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "P2025") {
+      return res.status(404).json({ success: false, message: "Designation not found" });
+    }
+    return res.status(500).json({ success: false, message: "Failed to delete designation" });
+  }
+});
+
+router.get("/central/work-locations", async (req, res) => {
+  const includeInactive = parseIncludeInactive(req.query.includeInactive);
+  const rows = await centralPrisma.operatorWorkLocation.findMany({
+    where: includeInactive ? undefined : { active: true },
+    orderBy: [{ name: "asc" }, { id: "asc" }],
+  });
+  return res.json({ success: true, count: rows.length, rows });
+});
+
+router.post("/central/work-locations", async (req, res) => {
+  const payload = mapLookupPayload(req.body || {});
+  if (!payload.name) {
+    return res.status(400).json({ success: false, message: "name is required" });
+  }
+
+  const existing = await centralPrisma.operatorWorkLocation.findUnique({ where: { name: payload.name } });
+  if (existing) {
+    return res.status(409).json({ success: false, message: "Work location already exists" });
+  }
+
+  const row = await centralPrisma.operatorWorkLocation.create({ data: payload });
+  const sync = await syncCentralCatalog("central_work_location_create");
+  const reverseSync = await pushCentralCatalogToShops("workLocations", {
+    trigger: "central_work_location_create",
+  });
+  return res.json({ success: true, data: row, sync: sync.summary, reverseSync });
+});
+
+router.put("/central/work-locations/:id", async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ success: false, message: "Invalid work location id" });
+  }
+
+  const existing = await centralPrisma.operatorWorkLocation.findUnique({ where: { id } });
+  if (!existing) {
+    return res.status(404).json({ success: false, message: "Work location not found" });
+  }
+
+  const payload = mapLookupPayload(req.body || {}, existing);
+  if (!payload.name) {
+    return res.status(400).json({ success: false, message: "name is required" });
+  }
+
+  const duplicate = await centralPrisma.operatorWorkLocation.findUnique({ where: { name: payload.name } });
+  if (duplicate && duplicate.id !== id) {
+    return res.status(409).json({ success: false, message: "Work location already exists" });
+  }
+
+  const row = await centralPrisma.operatorWorkLocation.update({ where: { id }, data: payload });
+  const sync = await syncCentralCatalog("central_work_location_update");
+  const reverseSync = await pushCentralCatalogToShops("workLocations", {
+    trigger: "central_work_location_update",
+  });
+  return res.json({ success: true, data: row, sync: sync.summary, reverseSync });
+});
+
+router.delete("/central/work-locations/:id", async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ success: false, message: "Invalid work location id" });
+  }
+
+  try {
+    await centralPrisma.operatorWorkLocation.delete({ where: { id } });
+    const sync = await syncCentralCatalog("central_work_location_delete");
+    const reverseSync = await pushCentralCatalogToShops("workLocations", {
+      trigger: "central_work_location_delete",
+    });
+    return res.json({
+      success: true,
+      message: "Work location deleted",
+      sync: sync.summary,
+      reverseSync,
+    });
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "P2025") {
+      return res.status(404).json({ success: false, message: "Work location not found" });
+    }
+    return res.status(500).json({ success: false, message: "Failed to delete work location" });
   }
 });
 
@@ -2265,6 +2624,229 @@ router.delete("/shop-locations/:id", async (req, res) => {
   }
 });
 
+router.get("/designations", async (req, res) => {
+  const includeInactive = parseIncludeInactive(req.query.includeInactive);
+  const rows = await prisma.workerDesignation.findMany({
+    where: includeInactive ? undefined : { active: true },
+    orderBy: [{ name: "asc" }, { id: "asc" }],
+  });
+  return res.json({ success: true, count: rows.length, rows });
+});
+
+router.post("/designations", async (req, res) => {
+  const payload = mapLookupPayload(req.body || {});
+  if (!payload.name) {
+    return res.status(400).json({ success: false, message: "name is required" });
+  }
+
+  const settings = await getCatalogSyncSettings();
+  if (settings.syncOperatorsWithCentral && settings.centralBaseUrl) {
+    try {
+      const result = await forwardCatalogWriteToCentral(settings, "/api/meta/central/designations", "POST", payload);
+      return res.json(result);
+    } catch (error) {
+      return res.status(502).json({
+        success: false,
+        message: error instanceof Error ? error.message : "Failed to sync designation with central",
+      });
+    }
+  }
+
+  const existing = await prisma.workerDesignation.findUnique({ where: { name: payload.name } });
+  if (existing) {
+    return res.status(409).json({ success: false, message: "Designation already exists" });
+  }
+  const row = await prisma.workerDesignation.create({ data: payload });
+  return res.json({ success: true, data: row, localOnly: true });
+});
+
+router.put("/designations/:id", async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ success: false, message: "Invalid designation id" });
+  }
+  const existing = await prisma.workerDesignation.findUnique({ where: { id } });
+  if (!existing) {
+    return res.status(404).json({ success: false, message: "Designation not found" });
+  }
+
+  const payload = mapLookupPayload(req.body || {}, existing);
+  if (!payload.name) {
+    return res.status(400).json({ success: false, message: "name is required" });
+  }
+
+  const settings = await getCatalogSyncSettings();
+  if (settings.syncOperatorsWithCentral && settings.centralBaseUrl) {
+    try {
+      const result = await forwardCatalogWriteToCentral(
+        settings,
+        `/api/meta/central/designations/${id}`,
+        "PUT",
+        payload
+      );
+      return res.json(result);
+    } catch (error) {
+      return res.status(502).json({
+        success: false,
+        message: error instanceof Error ? error.message : "Failed to sync designation with central",
+      });
+    }
+  }
+
+  const duplicate = await prisma.workerDesignation.findUnique({ where: { name: payload.name } });
+  if (duplicate && duplicate.id !== id) {
+    return res.status(409).json({ success: false, message: "Designation already exists" });
+  }
+  const row = await prisma.workerDesignation.update({ where: { id }, data: payload });
+  return res.json({ success: true, data: row, localOnly: true });
+});
+
+router.delete("/designations/:id", async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ success: false, message: "Invalid designation id" });
+  }
+
+  const settings = await getCatalogSyncSettings();
+  if (settings.syncOperatorsWithCentral && settings.centralBaseUrl) {
+    try {
+      const result = await forwardCatalogWriteToCentral(settings, `/api/meta/central/designations/${id}`, "DELETE");
+      return res.json(result);
+    } catch (error) {
+      return res.status(502).json({
+        success: false,
+        message: error instanceof Error ? error.message : "Failed to sync designation with central",
+      });
+    }
+  }
+
+  try {
+    await prisma.workerDesignation.delete({ where: { id } });
+    return res.json({ success: true, message: "Designation deleted", localOnly: true });
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "P2025") {
+      return res.status(404).json({ success: false, message: "Designation not found" });
+    }
+    return res.status(500).json({ success: false, message: "Failed to delete designation" });
+  }
+});
+
+router.get("/work-locations", async (req, res) => {
+  const includeInactive = parseIncludeInactive(req.query.includeInactive);
+  const rows = await prisma.workerWorkLocation.findMany({
+    where: includeInactive ? undefined : { active: true },
+    orderBy: [{ name: "asc" }, { id: "asc" }],
+  });
+  return res.json({ success: true, count: rows.length, rows });
+});
+
+router.post("/work-locations", async (req, res) => {
+  const payload = mapLookupPayload(req.body || {});
+  if (!payload.name) {
+    return res.status(400).json({ success: false, message: "name is required" });
+  }
+
+  const settings = await getCatalogSyncSettings();
+  if (settings.syncOperatorsWithCentral && settings.centralBaseUrl) {
+    try {
+      const result = await forwardCatalogWriteToCentral(
+        settings,
+        "/api/meta/central/work-locations",
+        "POST",
+        payload
+      );
+      return res.json(result);
+    } catch (error) {
+      return res.status(502).json({
+        success: false,
+        message: error instanceof Error ? error.message : "Failed to sync work location with central",
+      });
+    }
+  }
+
+  const existing = await prisma.workerWorkLocation.findUnique({ where: { name: payload.name } });
+  if (existing) {
+    return res.status(409).json({ success: false, message: "Work location already exists" });
+  }
+  const row = await prisma.workerWorkLocation.create({ data: payload });
+  return res.json({ success: true, data: row, localOnly: true });
+});
+
+router.put("/work-locations/:id", async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ success: false, message: "Invalid work location id" });
+  }
+  const existing = await prisma.workerWorkLocation.findUnique({ where: { id } });
+  if (!existing) {
+    return res.status(404).json({ success: false, message: "Work location not found" });
+  }
+
+  const payload = mapLookupPayload(req.body || {}, existing);
+  if (!payload.name) {
+    return res.status(400).json({ success: false, message: "name is required" });
+  }
+
+  const settings = await getCatalogSyncSettings();
+  if (settings.syncOperatorsWithCentral && settings.centralBaseUrl) {
+    try {
+      const result = await forwardCatalogWriteToCentral(
+        settings,
+        `/api/meta/central/work-locations/${id}`,
+        "PUT",
+        payload
+      );
+      return res.json(result);
+    } catch (error) {
+      return res.status(502).json({
+        success: false,
+        message: error instanceof Error ? error.message : "Failed to sync work location with central",
+      });
+    }
+  }
+
+  const duplicate = await prisma.workerWorkLocation.findUnique({ where: { name: payload.name } });
+  if (duplicate && duplicate.id !== id) {
+    return res.status(409).json({ success: false, message: "Work location already exists" });
+  }
+  const row = await prisma.workerWorkLocation.update({ where: { id }, data: payload });
+  return res.json({ success: true, data: row, localOnly: true });
+});
+
+router.delete("/work-locations/:id", async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ success: false, message: "Invalid work location id" });
+  }
+
+  const settings = await getCatalogSyncSettings();
+  if (settings.syncOperatorsWithCentral && settings.centralBaseUrl) {
+    try {
+      const result = await forwardCatalogWriteToCentral(
+        settings,
+        `/api/meta/central/work-locations/${id}`,
+        "DELETE"
+      );
+      return res.json(result);
+    } catch (error) {
+      return res.status(502).json({
+        success: false,
+        message: error instanceof Error ? error.message : "Failed to sync work location with central",
+      });
+    }
+  }
+
+  try {
+    await prisma.workerWorkLocation.delete({ where: { id } });
+    return res.json({ success: true, message: "Work location deleted", localOnly: true });
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "P2025") {
+      return res.status(404).json({ success: false, message: "Work location not found" });
+    }
+    return res.status(500).json({ success: false, message: "Failed to delete work location" });
+  }
+});
+
 router.get("/workers", async (req, res) => {
   const includeInactive = parseIncludeInactive(req.query.includeInactive);
   const rows = await prisma.worker.findMany({
@@ -2316,93 +2898,17 @@ router.post("/workers", async (req, res) => {
 });
 
 router.put("/workers/:id", async (req, res) => {
-  const id = parseId(req.params.id);
-  if (!id) {
-    return res.status(400).json({ success: false, message: "Invalid operator id" });
-  }
-
-  const payload = parseOperatorPayload(req.body || {}, { defaultActive: true });
-  const validationError = validateOperatorPayload(payload);
-
-  if (validationError) {
-    return res.status(400).json({ success: false, message: validationError });
-  }
-
-  const settings = await getCatalogSyncSettings();
-  if (settings.syncOperatorsWithCentral && settings.centralBaseUrl) {
-    try {
-      const result = await forwardCatalogWriteToCentral(
-        settings,
-        `/api/meta/central/workers/${id}`,
-        "PUT",
-        payload
-      );
-      return res.json(result);
-    } catch (error) {
-      return res.status(502).json({
-        success: false,
-        message: error instanceof Error ? error.message : "Failed to sync operator with central",
-      });
-    }
-  }
-
-  const existing = await prisma.worker.findUnique({ where: { id } });
-  if (!existing) {
-    return res.status(404).json({ success: false, message: "Operator not found" });
-  }
-
-  const duplicate = await prisma.worker.findUnique({ where: { name: payload.name } });
-  if (duplicate && duplicate.id !== id) {
-    return res.status(409).json({ success: false, message: "Operator name already exists" });
-  }
-
-  const row = await updateOperatorRow(
-    prisma,
-    {
-      personDelegate: "worker",
-      designationDelegate: "workerDesignation",
-      workLocationDelegate: "workerWorkLocation",
-    },
-    id,
-    payload
-  );
-  return res.json({ success: true, data: mapOperatorRecord(row), localOnly: true });
+  return res.status(403).json({
+    success: false,
+    message: "Editing operators from StockLens is disabled. Use Central to update operators.",
+  });
 });
 
 router.delete("/workers/:id", async (req, res) => {
-  const id = parseId(req.params.id);
-  if (!id) {
-    return res.status(400).json({ success: false, message: "Invalid operator id" });
-  }
-
-  const settings = await getCatalogSyncSettings();
-  if (settings.syncOperatorsWithCentral && settings.centralBaseUrl) {
-    try {
-      const result = await forwardCatalogWriteToCentral(
-        settings,
-        `/api/meta/central/workers/${id}`,
-        "DELETE"
-      );
-      return res.json(result);
-    } catch (error) {
-      return res.status(502).json({
-        success: false,
-        message: error instanceof Error ? error.message : "Failed to sync operator with central",
-      });
-    }
-  }
-
-  try {
-    await prisma.worker.delete({ where: { id } });
-    return res.json({ success: true, message: "Operator deleted", localOnly: true });
-  } catch (error) {
-    if (error && typeof error === "object" && error.code === "P2025") {
-      return res.status(404).json({ success: false, message: "Operator not found" });
-    }
-    return res
-      .status(409)
-      .json({ success: false, message: "Operator is linked to records and cannot be deleted" });
-  }
+  return res.status(403).json({
+    success: false,
+    message: "Deleting operators from StockLens is disabled. Use Central to delete operators.",
+  });
 });
 
 router.get("/phones", async (req, res) => {

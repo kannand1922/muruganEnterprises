@@ -167,7 +167,6 @@ export type StockOverviewLocation = {
   scannedCount: number;
   trackedCount: number;
   matchedCount: number;
-  unmatchedCount: number;
   uncheckedCount: number;
   mismatchCount: number;
   operatorCount: number;
@@ -176,7 +175,6 @@ export type StockOverviewLocation = {
   totalDiffValueFormatted: string;
   positiveDiffValue: number;
   negativeDiffValue: number;
-  unmatchedRows: StockOverviewMismatchRow[];
   uncheckedRows: StockOverviewUncheckedRow[];
   mismatchRows: StockOverviewMismatchRow[];
 };
@@ -198,7 +196,6 @@ export type StockOverviewResponse = {
     scannedCount: number;
     trackedCount: number;
     matchedCount: number;
-    unmatchedCount: number;
     uncheckedCount: number;
     mismatchCount: number;
     totalDiffBottles: number;
@@ -214,7 +211,6 @@ export type StockOverviewResponse = {
       scannedCount: number;
       trackedCount: number;
       matchedCount: number;
-      unmatchedCount: number;
       uncheckedCount: number;
       mismatchCount: number;
       totalDiffBottles: number;

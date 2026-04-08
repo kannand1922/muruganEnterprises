@@ -3,6 +3,8 @@ const { centralPrisma } = require("../centralPrisma");
 
 const MANAGED_WORKER_NAMES_KEY = "central_sync_managed_worker_names";
 const MANAGED_BEST_SELLER_CODES_KEY = "central_sync_managed_best_seller_codes";
+const MANAGED_WORKER_DESIGNATION_NAMES_KEY = "central_sync_managed_worker_designation_names";
+const MANAGED_WORK_LOCATION_NAMES_KEY = "central_sync_managed_work_location_names";
 
 const OPERATOR_RELATION_INCLUDE = {
   designation: true,
@@ -113,9 +115,35 @@ function normalizeBestSellers(rows) {
     .sort((a, b) => a.itemCode.localeCompare(b.itemCode) || a.id - b.id);
 }
 
+function normalizeDesignations(rows) {
+  return rows
+    .map((row) => ({
+      id: Number(row.id),
+      name: String(row.name || "").trim(),
+      active: Boolean(row.active),
+      createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+      updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
+    }))
+    .filter((row) => row.name)
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
+}
+
+function normalizeWorkLocations(rows) {
+  return rows
+    .map((row) => ({
+      id: Number(row.id),
+      name: String(row.name || "").trim(),
+      active: Boolean(row.active),
+      createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+      updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
+    }))
+    .filter((row) => row.name)
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
+}
+
 async function readCentralCatalog(options = {}) {
   const includeInactive = Boolean(options.includeInactive);
-  const [operators, bestSellers] = await Promise.all([
+  const [operators, bestSellers, designations, workLocations] = await Promise.all([
     centralPrisma.operator.findMany({
       where: includeInactive ? undefined : { active: true },
       include: OPERATOR_RELATION_INCLUDE,
@@ -125,18 +153,30 @@ async function readCentralCatalog(options = {}) {
       where: includeInactive ? undefined : { active: true },
       orderBy: [{ itemCode: "asc" }, { id: "asc" }],
     }),
+    centralPrisma.operatorDesignation.findMany({
+      where: includeInactive ? undefined : { active: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+    }),
+    centralPrisma.operatorWorkLocation.findMany({
+      where: includeInactive ? undefined : { active: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+    }),
   ]);
 
   return {
     operators: normalizeOperators(operators),
     bestSellers: normalizeBestSellers(bestSellers),
+    designations: normalizeDesignations(designations),
+    workLocations: normalizeWorkLocations(workLocations),
   };
 }
 
 async function seedCentralCatalogFromLocalIfEmpty() {
-  const [centralWorkerCount, centralBestSellerCount] = await Promise.all([
+  const [centralWorkerCount, centralBestSellerCount, centralDesignationCount, centralWorkLocationCount] = await Promise.all([
     centralPrisma.operator.count(),
     centralPrisma.bestSeller.count(),
+    centralPrisma.operatorDesignation.count(),
+    centralPrisma.operatorWorkLocation.count(),
   ]);
 
   if (centralWorkerCount === 0) {
@@ -228,6 +268,28 @@ async function seedCentralCatalogFromLocalIfEmpty() {
       });
     }
   }
+
+  if (centralDesignationCount === 0) {
+    const localDesignations = await prisma.workerDesignation.findMany({ orderBy: [{ id: "asc" }] });
+    for (const row of localDesignations) {
+      await centralPrisma.operatorDesignation.upsert({
+        where: { name: row.name },
+        update: { active: row.active },
+        create: { name: row.name, active: row.active },
+      });
+    }
+  }
+
+  if (centralWorkLocationCount === 0) {
+    const localWorkLocations = await prisma.workerWorkLocation.findMany({ orderBy: [{ id: "asc" }] });
+    for (const row of localWorkLocations) {
+      await centralPrisma.operatorWorkLocation.upsert({
+        where: { name: row.name },
+        update: { active: row.active },
+        create: { name: row.name, active: row.active },
+      });
+    }
+  }
 }
 
 function buildSnapshotSignature(catalog) {
@@ -269,6 +331,18 @@ function buildSnapshotSignature(catalog) {
       itemName: row.itemName,
       brandName: row.brandName,
       packValue: row.packValue,
+      active: row.active,
+      updatedAt: row.updatedAt,
+    })),
+    designations: (catalog.designations || []).map((row) => ({
+      id: row.id,
+      name: row.name,
+      active: row.active,
+      updatedAt: row.updatedAt,
+    })),
+    workLocations: (catalog.workLocations || []).map((row) => ({
+      id: row.id,
+      name: row.name,
       active: row.active,
       updatedAt: row.updatedAt,
     })),
@@ -568,6 +642,74 @@ async function syncBestSellersToLocalTx(tx, centralBestSellers) {
   };
 }
 
+async function syncDesignationsToLocalTx(tx, centralDesignations) {
+  const rows = normalizeDesignations(centralDesignations);
+  const previousManagedNames = await getManagedValues(tx, MANAGED_WORKER_DESIGNATION_NAMES_KEY);
+  const activeNameSet = new Set(rows.filter((row) => row.active).map((row) => row.name));
+
+  for (const row of rows) {
+    await tx.workerDesignation.upsert({
+      where: { name: row.name },
+      update: { active: row.active },
+      create: { name: row.name, active: row.active },
+    });
+  }
+
+  const removedManagedNames = previousManagedNames.filter((name) => !activeNameSet.has(name));
+  if (removedManagedNames.length) {
+    await tx.workerDesignation.updateMany({
+      where: { name: { in: removedManagedNames } },
+      data: { active: false },
+    });
+  }
+
+  await saveManagedValues(
+    tx,
+    MANAGED_WORKER_DESIGNATION_NAMES_KEY,
+    rows.filter((row) => row.active).map((row) => row.name)
+  );
+
+  return {
+    designationCount: rows.length,
+    activeDesignationCount: rows.filter((row) => row.active).length,
+    deactivatedDesignationCount: removedManagedNames.length,
+  };
+}
+
+async function syncWorkLocationsToLocalTx(tx, centralWorkLocations) {
+  const rows = normalizeWorkLocations(centralWorkLocations);
+  const previousManagedNames = await getManagedValues(tx, MANAGED_WORK_LOCATION_NAMES_KEY);
+  const activeNameSet = new Set(rows.filter((row) => row.active).map((row) => row.name));
+
+  for (const row of rows) {
+    await tx.workerWorkLocation.upsert({
+      where: { name: row.name },
+      update: { active: row.active },
+      create: { name: row.name, active: row.active },
+    });
+  }
+
+  const removedManagedNames = previousManagedNames.filter((name) => !activeNameSet.has(name));
+  if (removedManagedNames.length) {
+    await tx.workerWorkLocation.updateMany({
+      where: { name: { in: removedManagedNames } },
+      data: { active: false },
+    });
+  }
+
+  await saveManagedValues(
+    tx,
+    MANAGED_WORK_LOCATION_NAMES_KEY,
+    rows.filter((row) => row.active).map((row) => row.name)
+  );
+
+  return {
+    workLocationCount: rows.length,
+    activeWorkLocationCount: rows.filter((row) => row.active).length,
+    deactivatedWorkLocationCount: removedManagedNames.length,
+  };
+}
+
 async function getManagedValues(tx, key) {
   const row = await tx.appSetting.findUnique({ where: { key } });
   return parseManagedList(row?.value);
@@ -588,9 +730,17 @@ async function applyCatalogToLocal(catalog) {
 async function syncCatalogToLocal(catalog, options = {}) {
   const syncOperators = options.syncOperators !== false;
   const syncBestSellers = options.syncBestSellers !== false;
+  const syncDesignations =
+    options.syncDesignations === undefined ? syncOperators : options.syncDesignations !== false;
+  const syncWorkLocations =
+    options.syncWorkLocations === undefined ? syncOperators : options.syncWorkLocations !== false;
   const safeCatalog = {
     operators: Array.isArray(catalog?.operators) ? normalizeOperators(catalog.operators) : [],
     bestSellers: Array.isArray(catalog?.bestSellers) ? normalizeBestSellers(catalog.bestSellers) : [],
+    designations: Array.isArray(catalog?.designations) ? normalizeDesignations(catalog.designations) : [],
+    workLocations: Array.isArray(catalog?.workLocations)
+      ? normalizeWorkLocations(catalog.workLocations)
+      : [],
   };
 
   return prisma.$transaction(async (tx) => {
@@ -607,13 +757,31 @@ async function syncCatalogToLocal(catalog, options = {}) {
           bestSellerCount: 0,
           removedBestSellerCount: 0,
         };
+    const designationSummary = syncDesignations
+      ? await syncDesignationsToLocalTx(tx, safeCatalog.designations)
+      : {
+          designationCount: 0,
+          activeDesignationCount: 0,
+          deactivatedDesignationCount: 0,
+        };
+    const workLocationSummary = syncWorkLocations
+      ? await syncWorkLocationsToLocalTx(tx, safeCatalog.workLocations)
+      : {
+          workLocationCount: 0,
+          activeWorkLocationCount: 0,
+          deactivatedWorkLocationCount: 0,
+        };
 
     return {
       ...workerSummary,
       ...bestSellerSummary,
+      ...designationSummary,
+      ...workLocationSummary,
       targetDatabases: ["stocklens_prisma.sqlite"],
       syncOperators,
       syncBestSellers,
+      syncDesignations,
+      syncWorkLocations,
     };
   });
 }
@@ -684,6 +852,8 @@ function getCentralSyncState() {
 module.exports = {
   normalizeOperators,
   normalizeBestSellers,
+  normalizeDesignations,
+  normalizeWorkLocations,
   readCentralCatalog,
   syncCatalogToLocal,
   syncCentralCatalog,

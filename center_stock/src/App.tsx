@@ -1,16 +1,20 @@
 import { type ChangeEvent, type CSSProperties, type FormEvent, useEffect, useState } from "react";
 import {
+  createCentralDesignation,
   createCentralBestSelling,
   createCentralShop,
+  createCentralWorkLocation,
   createCentralWorker,
   deleteCentralBestSelling,
   deleteCentralShop,
   deleteCentralWorker,
+  getCentralDesignations,
   getCentralDashboard,
   getCentralDashboardShopDetail,
   getCentralBestSelling,
   getCentralReverseSyncSettings,
   getCentralShops,
+  getCentralWorkLocations,
   getCentralWorkers,
   getMasterProducts,
   updateCentralReverseSyncSettings,
@@ -39,6 +43,7 @@ import type {
   StockOverviewMismatchRow,
   StockOverviewUncheckedRow,
   Worker,
+  WorkerLookupRow,
   WorkerPayload,
 } from "./types";
 
@@ -113,6 +118,8 @@ type ShopTheme = {
   soft: string;
   border: string;
 };
+
+type OperatorOverviewLocation = NonNullable<CentralDashboardShopDetailResponse["operatorOverview"]>["locations"][number];
 
 function getActivePageFromUrl(): ActivePage {
   if (typeof window === "undefined") return "dashboard";
@@ -506,6 +513,26 @@ function formatEventActionLabel(log: StockActivityLogRow) {
   return [scope, action].filter(Boolean).join(" / ") || "-";
 }
 
+function splitSearchTokens(value: string) {
+  return normalizeText(value)
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function matchesSearchTokens(tokens: string[], fields: unknown[]) {
+  if (!tokens.length) return true;
+  const haystack = fields
+    .map((field) => normalizeText(field))
+    .filter(Boolean)
+    .join(" ");
+  return tokens.every((token) => haystack.includes(token));
+}
+
+function getEventActionKey(log: Pick<StockActivityLogRow, "eventScope" | "eventAction">) {
+  return `${normalizeText(log.eventScope)}|${normalizeText(log.eventAction)}`;
+}
+
 function SummaryStat({
   label,
   value,
@@ -552,7 +579,6 @@ function SummaryPanel({
       </div>
       <div className="metric-panel-grid">
         <SummaryStat label="Matched" value={metrics.matchedCount} tone="success" />
-        <SummaryStat label="Unmatched" value={metrics.unmatchedCount} tone="warning" />
         <SummaryStat label="Mismatch" value={metrics.mismatchCount} tone="danger" />
         <SummaryStat label="Bottle Diff" value={formatSignedBottles(metrics.totalDiffBottles)} />
         <SummaryStat
@@ -665,13 +691,19 @@ function ScopeDetailAccordion({
   title,
   subtitle,
   location,
+  productSectionFilter = "all",
   defaultOpen = false,
 }: {
   title: string;
   subtitle: string;
   location: StockOverviewLocation | null | undefined;
+  productSectionFilter?: "all" | "matched" | "mismatch" | "unchecked";
   defaultOpen?: boolean;
 }) {
+  const showMatched = productSectionFilter === "all" || productSectionFilter === "matched";
+  const showMismatch = productSectionFilter === "all" || productSectionFilter === "mismatch";
+  const showUnchecked = productSectionFilter === "all" || productSectionFilter === "unchecked";
+
   return (
     <details className="scope-accordion" open={defaultOpen}>
       <summary className="scope-accordion-summary">
@@ -681,7 +713,6 @@ function ScopeDetailAccordion({
         </div>
         <div className="scope-accordion-summary-metrics">
           <span>Matched {location?.matchedCount ?? 0}</span>
-          <span>Unmatched {location?.unmatchedCount ?? 0}</span>
           <span>Mismatch {location?.mismatchCount ?? 0}</span>
         </div>
       </summary>
@@ -696,7 +727,6 @@ function ScopeDetailAccordion({
                 scannedCount: location.scannedCount,
                 trackedCount: location.trackedCount,
                 matchedCount: location.matchedCount,
-                unmatchedCount: location.unmatchedCount,
                 uncheckedCount: location.uncheckedCount,
                 mismatchCount: location.mismatchCount,
                 totalDiffBottles: location.totalDiffBottles,
@@ -709,37 +739,35 @@ function ScopeDetailAccordion({
           </div>
 
           <div className="detail-sections">
-            <details className="detail-accordion" open>
-              <summary className="detail-accordion-summary">
-                <span>Matched Products</span>
-                <strong>{location.matchedRows.length}</strong>
-              </summary>
-              <MatchedTable rows={location.matchedRows} />
-            </details>
+            {showMatched ? (
+              <details className="detail-accordion" open>
+                <summary className="detail-accordion-summary">
+                  <span>Matched Products</span>
+                  <strong>{location.matchedRows.length}</strong>
+                </summary>
+                <MatchedTable rows={location.matchedRows} />
+              </details>
+            ) : null}
 
-            <details className="detail-accordion" open>
-              <summary className="detail-accordion-summary">
-                <span>Unmatched Products</span>
-                <strong>{location.unmatchedRows.length}</strong>
-              </summary>
-              <MismatchTable rows={location.unmatchedRows} />
-            </details>
+            {showMismatch ? (
+              <details className="detail-accordion" open>
+                <summary className="detail-accordion-summary">
+                  <span>Mismatch Products</span>
+                  <strong>{location.mismatchRows.length}</strong>
+                </summary>
+                <MismatchTable rows={location.mismatchRows} />
+              </details>
+            ) : null}
 
-            <details className="detail-accordion" open>
-              <summary className="detail-accordion-summary">
-                <span>Mismatch Products</span>
-                <strong>{location.mismatchRows.length}</strong>
-              </summary>
-              <MismatchTable rows={location.mismatchRows} />
-            </details>
-
-            <details className="detail-accordion">
-              <summary className="detail-accordion-summary">
-                <span>Unchecked Products</span>
-                <strong>{location.uncheckedRows.length}</strong>
-              </summary>
-              <UncheckedTable rows={location.uncheckedRows} />
-            </details>
+            {showUnchecked ? (
+              <details className="detail-accordion">
+                <summary className="detail-accordion-summary">
+                  <span>Unchecked Products</span>
+                  <strong>{location.uncheckedRows.length}</strong>
+                </summary>
+                <UncheckedTable rows={location.uncheckedRows} />
+              </details>
+            ) : null}
           </div>
         </div>
       ) : (
@@ -767,9 +795,7 @@ function LocationDetailCard({
         </div>
         <div className="location-detail-summary">
           <span>Today matched: {todayLocation?.matchedCount ?? 0}</span>
-          <span>Today unmatched: {todayLocation?.unmatchedCount ?? 0}</span>
           <span>Cycle mismatch: {location.mismatchCount}</span>
-          <span>Cycle unmatched: {location.unmatchedCount}</span>
         </div>
       </header>
 
@@ -796,7 +822,6 @@ function toLocationMetrics(location: StockOverviewLocation | null | undefined): 
     scannedCount: location.scannedCount,
     trackedCount: location.trackedCount,
     matchedCount: location.matchedCount,
-    unmatchedCount: location.unmatchedCount,
     uncheckedCount: location.uncheckedCount,
     mismatchCount: location.mismatchCount,
     totalDiffBottles: location.totalDiffBottles,
@@ -909,12 +934,14 @@ function ShopLocationDetailSection({
   todayLocation,
   operatorLocation,
   activityLocation,
+  productSectionFilter = "all",
   defaultOpen = false,
 }: {
   location: StockOverviewLocation;
   todayLocation?: StockOverviewLocation | null;
   operatorLocation?: NonNullable<CentralDashboardShopDetailResponse["operatorOverview"]>["locations"][number] | null;
   activityLocation?: NonNullable<StockActivityLogResponse["locations"]>[number] | null;
+  productSectionFilter?: "all" | "matched" | "mismatch" | "unchecked";
   defaultOpen?: boolean;
 }) {
   return (
@@ -958,12 +985,14 @@ function ShopLocationDetailSection({
               title="Today"
               subtitle="Today product status"
               location={todayLocation || null}
+              productSectionFilter={productSectionFilter}
               defaultOpen
             />
             <ScopeDetailAccordion
               title="Full Cycle"
               subtitle="Cycle product status"
               location={location}
+              productSectionFilter={productSectionFilter}
             />
           </div>
         </section>
@@ -1015,7 +1044,29 @@ function ShopDetailPage({
   loading: boolean;
   onBack: () => void;
 }) {
+  const [searchText, setSearchText] = useState("");
+  const [locationFilter, setLocationFilter] = useState("all");
+  const [operatorFilter, setOperatorFilter] = useState("all");
+  const [actionFilter, setActionFilter] = useState("all");
+  const [productSectionFilter, setProductSectionFilter] = useState<"all" | "matched" | "mismatch" | "unchecked">(
+    "all"
+  );
+  const [logResultFilter, setLogResultFilter] = useState<"all" | "matched" | "mismatch">("all");
+
+  useEffect(() => {
+    setSearchText("");
+    setLocationFilter("all");
+    setOperatorFilter("all");
+    setActionFilter("all");
+    setProductSectionFilter("all");
+    setLogResultFilter("all");
+  }, [shop?.id, detail?.shop.id]);
+
   const overview = detail?.overview;
+  const queryTokens = splitSearchTokens(searchText);
+  const selectedLocationId = locationFilter === "all" ? null : Number(locationFilter);
+  const selectedOperatorId = operatorFilter === "all" ? null : Number(operatorFilter);
+
   const todayLocationsById = new Map(
     (overview?.today?.locations || []).map((row) => [row.shopLocationId, row])
   );
@@ -1025,6 +1076,282 @@ function ShopDetailPage({
   const logsByLocationId = new Map(
     (detail?.activityLogs?.locations || []).map((row) => [row.shopLocationId, row])
   );
+
+  const operatorOptions = Array.from(
+    ((detail?.operatorOverview?.locations || []).flatMap((locationRow) =>
+      locationRow.operators.map((operator) => [operator.operatorId, operator.operatorName] as const)
+    )).reduce((map, [id, name]) => map.set(id, name), new Map<number, string>())
+  )
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
+  const actionOptions = Array.from(
+    ((detail?.activityLogs?.locations || []).flatMap((locationRow) => locationRow.logs)).reduce((map, log) => {
+      const key = getEventActionKey(log);
+      const label = formatEventActionLabel(log);
+      if (key && !map.has(key)) {
+        map.set(key, label);
+      }
+      return map;
+    }, new Map<string, string>())
+  )
+    .map(([key, label]) => ({ key, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  const rebuildFilteredLocation = (
+    base: StockOverviewLocation,
+    matchedRows: StockOverviewMatchedRow[],
+    mismatchRows: StockOverviewMismatchRow[],
+    uncheckedRows: StockOverviewUncheckedRow[]
+  ): StockOverviewLocation => {
+    const totalDiffBottles = mismatchRows.reduce((sum, row) => sum + (Number(row.diffBottles) || 0), 0);
+    const totalDiffValue = mismatchRows.reduce((sum, row) => sum + (Number(row.priceDiff) || 0), 0);
+    return {
+      ...base,
+      matchedRows,
+      mismatchRows,
+      uncheckedRows,
+      matchedCount: matchedRows.length,
+      mismatchCount: mismatchRows.length,
+      uncheckedCount: uncheckedRows.length,
+      scannedCount: matchedRows.length + mismatchRows.length,
+      trackedCount: matchedRows.length + mismatchRows.length + uncheckedRows.length,
+      totalDiffBottles,
+      totalDiffValue,
+      totalDiffValueFormatted: formatSignedCurrency(totalDiffValue),
+      positiveDiffValue: mismatchRows.reduce(
+        (sum, row) => sum + Math.max(Number(row.priceDiff) || 0, 0),
+        0
+      ),
+      negativeDiffValue: mismatchRows.reduce(
+        (sum, row) => sum + Math.min(Number(row.priceDiff) || 0, 0),
+        0
+      ),
+    };
+  };
+
+  const filteredLocationEntries = (overview?.locations || [])
+    .map((location) => {
+      if (selectedLocationId != null && location.shopLocationId !== selectedLocationId) {
+        return null;
+      }
+
+      const todayLocation = todayLocationsById.get(location.shopLocationId) || null;
+      const operatorLocation = operatorsByLocationId.get(location.shopLocationId) || null;
+      const activityLocation = logsByLocationId.get(location.shopLocationId) || null;
+
+      const filteredCycleLocation = rebuildFilteredLocation(
+        location,
+        location.matchedRows.filter((row) =>
+          matchesSearchTokens(queryTokens, [row.name, row.itemCode, location.shopLocationName, location.shopLocationLabel])
+        ),
+        location.mismatchRows.filter((row) => {
+          if (selectedOperatorId != null && Number(row.operatorId || 0) !== selectedOperatorId) return false;
+          return matchesSearchTokens(queryTokens, [
+            row.name,
+            row.itemCode,
+            row.itemName,
+            row.brandName,
+            row.packValue,
+            row.diffBottles,
+            row.priceDiff,
+            row.updatedAt,
+            row.operatorId,
+            location.shopLocationName,
+            location.shopLocationLabel,
+          ]);
+        }),
+        location.uncheckedRows.filter((row) =>
+          matchesSearchTokens(queryTokens, [
+            row.name,
+            row.itemCode,
+            row.itemName,
+            row.brandName,
+            row.packValue,
+            row.mrp,
+            location.shopLocationName,
+            location.shopLocationLabel,
+          ])
+        )
+      );
+
+      const filteredTodayLocation = todayLocation
+        ? rebuildFilteredLocation(
+            todayLocation,
+            todayLocation.matchedRows.filter((row) =>
+              matchesSearchTokens(queryTokens, [
+                row.name,
+                row.itemCode,
+                todayLocation.shopLocationName,
+                todayLocation.shopLocationLabel,
+              ])
+            ),
+            todayLocation.mismatchRows.filter((row) => {
+              if (selectedOperatorId != null && Number(row.operatorId || 0) !== selectedOperatorId) return false;
+              return matchesSearchTokens(queryTokens, [
+                row.name,
+                row.itemCode,
+                row.itemName,
+                row.brandName,
+                row.packValue,
+                row.diffBottles,
+                row.priceDiff,
+                row.updatedAt,
+                row.operatorId,
+                todayLocation.shopLocationName,
+                todayLocation.shopLocationLabel,
+              ]);
+            }),
+            todayLocation.uncheckedRows.filter((row) =>
+              matchesSearchTokens(queryTokens, [
+                row.name,
+                row.itemCode,
+                row.itemName,
+                row.brandName,
+                row.packValue,
+                row.mrp,
+                todayLocation.shopLocationName,
+                todayLocation.shopLocationLabel,
+              ])
+            )
+          )
+        : null;
+
+      let filteredOperatorLocation: OperatorOverviewLocation | null = null;
+      if (operatorLocation) {
+        const filteredOperators = operatorLocation.operators.reduce<OperatorOverviewLocation["operators"]>(
+          (acc, operator) => {
+            if (selectedOperatorId != null && operator.operatorId !== selectedOperatorId) return acc;
+            const filteredRows = operator.rows.filter((row) =>
+              matchesSearchTokens(queryTokens, [
+                operator.operatorName,
+                operator.operatorId,
+                row.name,
+                row.itemCode,
+                row.itemName,
+                row.brandName,
+                row.packValue,
+                row.diffBottles,
+                row.priceDiff,
+                row.updatedAt,
+                location.shopLocationName,
+                location.shopLocationLabel,
+              ])
+            );
+            const operatorTextMatch = matchesSearchTokens(queryTokens, [
+              operator.operatorName,
+              operator.operatorId,
+              location.shopLocationName,
+              location.shopLocationLabel,
+            ]);
+            if (queryTokens.length && filteredRows.length === 0 && !operatorTextMatch) return acc;
+
+            const totalDiffBottles = filteredRows.reduce((sum, row) => sum + (Number(row.diffBottles) || 0), 0);
+            const totalDiffValue = filteredRows.reduce((sum, row) => sum + (Number(row.priceDiff) || 0), 0);
+            acc.push({
+              ...operator,
+              rows: filteredRows,
+              mismatchCount: filteredRows.length,
+              totalDiffBottles,
+              totalDiffValue,
+              totalDiffValueFormatted: formatSignedCurrency(totalDiffValue),
+            });
+            return acc;
+          },
+          []
+        );
+        filteredOperatorLocation = {
+          ...operatorLocation,
+          operators: filteredOperators,
+        };
+      }
+
+      const filteredActivityLocation = activityLocation
+        ? (() => {
+            const logs = activityLocation.logs.filter((row) => {
+              if (selectedOperatorId != null && Number(row.operatorId || 0) !== selectedOperatorId) return false;
+              if (actionFilter !== "all" && getEventActionKey(row) !== actionFilter) return false;
+              if (logResultFilter === "matched" && row.matched !== true) return false;
+              if (logResultFilter === "mismatch" && !(row.matched === false || Number(row.diffBottles || 0) !== 0)) {
+                return false;
+              }
+              return matchesSearchTokens(queryTokens, [
+                row.operatorName,
+                row.operatorId,
+                row.phoneName,
+                row.itemCode,
+                row.itemName,
+                row.brandName,
+                row.packValue,
+                row.eventScope,
+                row.eventAction,
+                row.changeSummary,
+                row.diffBottles,
+                row.priceDiff,
+                row.activityDate,
+                row.eventTimeLabel,
+                location.shopLocationName,
+                location.shopLocationLabel,
+              ]);
+            });
+            const matchedCount = logs.filter((row) => row.matched === true).length;
+            const mismatchCount = logs.filter(
+              (row) => row.matched === false || Number(row.diffBottles || 0) !== 0
+            ).length;
+            const totalDiffBottles = logs.reduce((sum, row) => sum + (Number(row.diffBottles) || 0), 0);
+            const totalDiffValue = logs.reduce((sum, row) => sum + (Number(row.priceDiff) || 0), 0);
+            const operatorsTouched = new Set(
+              logs
+                .map((row) => Number(row.operatorId || 0))
+                .filter((operatorId) => Number.isFinite(operatorId) && operatorId > 0)
+            ).size;
+            return {
+              ...activityLocation,
+              logs,
+              logCount: logs.length,
+              operatorsTouched,
+              matchedCount,
+              mismatchCount,
+              totalDiffBottles,
+              totalDiffValue,
+              totalDiffValueFormatted: formatSignedCurrency(totalDiffValue),
+            };
+          })()
+        : null;
+
+      const hasVisibleRows =
+        filteredCycleLocation.matchedRows.length > 0 ||
+        filteredCycleLocation.mismatchRows.length > 0 ||
+        filteredCycleLocation.uncheckedRows.length > 0 ||
+        (filteredTodayLocation?.matchedRows.length || 0) > 0 ||
+        (filteredTodayLocation?.mismatchRows.length || 0) > 0 ||
+        (filteredTodayLocation?.uncheckedRows.length || 0) > 0 ||
+        (filteredOperatorLocation?.operators.length || 0) > 0 ||
+        (filteredActivityLocation?.logs.length || 0) > 0;
+
+      const hasFilterApplied =
+        queryTokens.length > 0 ||
+        selectedOperatorId != null ||
+        actionFilter !== "all" ||
+        logResultFilter !== "all" ||
+        productSectionFilter !== "all";
+      if (hasFilterApplied && !hasVisibleRows) {
+        return null;
+      }
+
+      return {
+        location: filteredCycleLocation,
+        todayLocation: filteredTodayLocation,
+        operatorLocation: filteredOperatorLocation,
+        activityLocation: filteredActivityLocation,
+      };
+    })
+    .filter(Boolean) as Array<{
+    location: StockOverviewLocation;
+    todayLocation: StockOverviewLocation | null;
+    operatorLocation: OperatorOverviewLocation | null;
+    activityLocation: NonNullable<StockActivityLogResponse["locations"]>[number] | null;
+  }>;
 
   return (
     <section className="section-card detail-page-shell">
@@ -1063,9 +1390,105 @@ function ShopDetailPage({
 
       {!loading && detail?.status === "online" && overview ? (
         <>
+          <section className="detail-filter-panel">
+            <div className="detail-filter-grid">
+              <label className="detail-filter-field detail-filter-field-search">
+                <span>Search</span>
+                <input
+                  type="search"
+                  value={searchText}
+                  onChange={(event) => setSearchText(event.target.value)}
+                  placeholder="Search items, codes, operators, logs, action, pack..."
+                />
+              </label>
+
+              <label className="detail-filter-field">
+                <span>Location</span>
+                <select value={locationFilter} onChange={(event) => setLocationFilter(event.target.value)}>
+                  <option value="all">All locations</option>
+                  {overview.locations.map((location) => (
+                    <option key={location.shopLocationId} value={String(location.shopLocationId)}>
+                      {location.shopLocationLabel} - {location.shopLocationName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="detail-filter-field">
+                <span>Operator</span>
+                <select value={operatorFilter} onChange={(event) => setOperatorFilter(event.target.value)}>
+                  <option value="all">All operators</option>
+                  {operatorOptions.map((operator) => (
+                    <option key={operator.id} value={String(operator.id)}>
+                      {operator.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="detail-filter-field">
+                <span>Product Rows</span>
+                <select
+                  value={productSectionFilter}
+                  onChange={(event) =>
+                    setProductSectionFilter(event.target.value as "all" | "matched" | "mismatch" | "unchecked")
+                  }
+                >
+                  <option value="all">All</option>
+                  <option value="matched">Matched only</option>
+                  <option value="mismatch">Mismatch only</option>
+                  <option value="unchecked">Unchecked only</option>
+                </select>
+              </label>
+
+              <label className="detail-filter-field">
+                <span>Log Action</span>
+                <select value={actionFilter} onChange={(event) => setActionFilter(event.target.value)}>
+                  <option value="all">All actions</option>
+                  {actionOptions.map((action) => (
+                    <option key={action.key} value={action.key}>
+                      {action.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="detail-filter-field">
+                <span>Log Result</span>
+                <select
+                  value={logResultFilter}
+                  onChange={(event) => setLogResultFilter(event.target.value as "all" | "matched" | "mismatch")}
+                >
+                  <option value="all">All</option>
+                  <option value="matched">Matched</option>
+                  <option value="mismatch">Mismatch</option>
+                </select>
+              </label>
+            </div>
+            <div className="detail-filter-actions">
+              <p>
+                Showing <strong>{filteredLocationEntries.length}</strong> of{" "}
+                <strong>{overview.locations.length}</strong> locations
+              </p>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => {
+                  setSearchText("");
+                  setLocationFilter("all");
+                  setOperatorFilter("all");
+                  setActionFilter("all");
+                  setProductSectionFilter("all");
+                  setLogResultFilter("all");
+                }}
+              >
+                Clear Filters
+              </button>
+            </div>
+          </section>
+
           <div className="top-metrics-grid detail-top-metrics">
             <SummaryStat label="Today Matched" value={overview.today?.summary.matchedCount ?? 0} tone="success" />
-            <SummaryStat label="Today Unmatched" value={overview.today?.summary.unmatchedCount ?? 0} tone="warning" />
             <SummaryStat label="Today Mismatch" value={overview.today?.summary.mismatchCount ?? 0} tone="danger" />
             <SummaryStat
               label="Today Bottle Diff"
@@ -1093,16 +1516,20 @@ function ShopDetailPage({
           </div>
 
           <div className="location-page-stack">
-            {overview.locations.map((location, index) => (
+            {filteredLocationEntries.map((entry, index) => (
               <ShopLocationDetailSection
-                key={`shop-detail-${location.shopLocationId}`}
-                location={location}
-                todayLocation={todayLocationsById.get(location.shopLocationId) || null}
-                operatorLocation={operatorsByLocationId.get(location.shopLocationId) || null}
-                activityLocation={logsByLocationId.get(location.shopLocationId) || null}
+                key={`shop-detail-${entry.location.shopLocationId}`}
+                location={entry.location}
+                todayLocation={entry.todayLocation}
+                operatorLocation={entry.operatorLocation}
+                activityLocation={entry.activityLocation}
+                productSectionFilter={productSectionFilter}
                 defaultOpen={index === 0}
               />
             ))}
+            {filteredLocationEntries.length === 0 ? (
+              <p className="detail-empty">No rows match current filters.</p>
+            ) : null}
           </div>
         </>
       ) : null}
@@ -1114,6 +1541,8 @@ function App() {
   const [dashboard, setDashboard] = useState<CentralDashboardResponse | null>(null);
   const [shops, setShops] = useState<CentralShopEndpoint[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const [designations, setDesignations] = useState<WorkerLookupRow[]>([]);
+  const [workLocations, setWorkLocations] = useState<WorkerLookupRow[]>([]);
   const [bestSellingRows, setBestSellingRows] = useState<BestSellingProduct[]>([]);
   const [masterProducts, setMasterProducts] = useState<MasterProduct[]>([]);
   const [reverseSyncSettings, setReverseSyncSettings] = useState<CentralReverseSyncSettings>({
@@ -1139,6 +1568,8 @@ function App() {
   const [viewingWorker, setViewingWorker] = useState<Worker | null>(null);
   const [workerForm, setWorkerForm] = useState<WorkerFormState>(() => createEmptyWorkerForm());
   const [workerListQuery, setWorkerListQuery] = useState("");
+  const [newDesignationName, setNewDesignationName] = useState("");
+  const [newWorkLocationName, setNewWorkLocationName] = useState("");
   const [bestSellingQuery, setBestSellingQuery] = useState("");
   const [bestSellingListQuery, setBestSellingListQuery] = useState("");
   const [backendUrlInput, setBackendUrlInput] = useState("");
@@ -1181,16 +1612,21 @@ function App() {
   async function loadShops() {
     setSettingsLoading(true);
     try {
-      const [shopRows, workerRows, bestSellingData, reverseSettings, masterRows] = await Promise.all([
+      const [shopRows, workerRows, bestSellingData, reverseSettings, masterRows, designationRows, workLocationRows] =
+        await Promise.all([
         getCentralShops(true),
         getCentralWorkers(true),
         getCentralBestSelling(true),
         getCentralReverseSyncSettings(),
         getMasterProducts("", 10000),
+        getCentralDesignations(true),
+        getCentralWorkLocations(true),
       ]);
       setShops(shopRows);
       setWorkers(workerRows);
       setBestSellingRows(bestSellingData);
+      setDesignations(designationRows);
+      setWorkLocations(workLocationRows);
       setReverseSyncSettings(reverseSettings);
       setSavedReverseSyncSettings(reverseSettings);
       setMasterProducts(masterRows);
@@ -1354,6 +1790,44 @@ function App() {
       await loadShops();
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Failed to delete central operator");
+    }
+  }
+
+  async function handleAddDesignation() {
+    const name = newDesignationName.trim();
+    if (!name) {
+      setError("Designation name is required");
+      return;
+    }
+    setError(null);
+    setMessage(null);
+    try {
+      await createCentralDesignation({ name, active: true });
+      setNewDesignationName("");
+      setWorkerForm((current) => ({ ...current, designationName: name }));
+      await loadShops();
+      setMessage("Designation added.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Failed to add designation");
+    }
+  }
+
+  async function handleAddWorkLocation() {
+    const name = newWorkLocationName.trim();
+    if (!name) {
+      setError("Work location name is required");
+      return;
+    }
+    setError(null);
+    setMessage(null);
+    try {
+      await createCentralWorkLocation({ name, active: true });
+      setNewWorkLocationName("");
+      setWorkerForm((current) => ({ ...current, workLocationName: name }));
+      await loadShops();
+      setMessage("Work location added.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Failed to add work location");
     }
   }
 
@@ -1630,32 +2104,57 @@ function App() {
 
         {activePage === "dashboard" && !selectedShopId ? (
           <>
-            <section className="top-metrics-grid">
-              <SummaryStat label="Configured Shops" value={dashboard?.summary.shopCount ?? 0} />
-              <SummaryStat label="Online" value={dashboard?.summary.onlineShopCount ?? 0} tone="success" />
-              <SummaryStat label="Offline" value={dashboard?.summary.offlineShopCount ?? 0} tone="warning" />
-              <SummaryStat label="Today Matched" value={dashboard?.summary.today.matchedCount ?? 0} tone="success" />
-              <SummaryStat label="Today Mismatch" value={dashboard?.summary.today.mismatchCount ?? 0} tone="danger" />
-              <SummaryStat
-                label="Today Bottle Diff"
-                value={formatSignedBottles(dashboard?.summary.today.totalDiffBottles ?? 0)}
-              />
-              <SummaryStat
-                label="Today Cash Diff"
-                value={formatSignedCurrency(dashboard?.summary.today.totalDiffValue ?? 0)}
-                tone={(dashboard?.summary.today.totalDiffValue ?? 0) < 0 ? "danger" : "default"}
-              />
-              <SummaryStat label="Cycle Matched" value={dashboard?.summary.cycle.matchedCount ?? 0} tone="success" />
-              <SummaryStat label="Cycle Mismatch" value={dashboard?.summary.cycle.mismatchCount ?? 0} tone="danger" />
-              <SummaryStat
-                label="Cycle Bottle Diff"
-                value={formatSignedBottles(dashboard?.summary.cycle.totalDiffBottles ?? 0)}
-              />
-              <SummaryStat
-                label="Cycle Cash Diff"
-                value={formatSignedCurrency(dashboard?.summary.cycle.totalDiffValue ?? 0)}
-                tone={(dashboard?.summary.cycle.totalDiffValue ?? 0) < 0 ? "danger" : "default"}
-              />
+            <section className="dashboard-summary-stack">
+              <div className="dashboard-summary-row dashboard-summary-row-meta">
+                <SummaryStat label="Configured Shops" value={dashboard?.summary.shopCount ?? 0} />
+                <SummaryStat label="Online" value={dashboard?.summary.onlineShopCount ?? 0} tone="success" />
+                <SummaryStat label="Offline" value={dashboard?.summary.offlineShopCount ?? 0} tone="warning" />
+                <SummaryStat
+                  label="Nil Stock"
+                  value={dashboard?.summary.nilStockCount ?? 0}
+                  tone={(dashboard?.summary.nilStockCount ?? 0) > 0 ? "warning" : "success"}
+                />
+              </div>
+
+              <article className="dashboard-summary-card">
+                <header>
+                  <p className="section-kicker">Today</p>
+                  <h3>Today Summary</h3>
+                </header>
+                <div className="dashboard-summary-row">
+                  <SummaryStat label="Matched" value={dashboard?.summary.today.matchedCount ?? 0} tone="success" />
+                  <SummaryStat label="Mismatch" value={dashboard?.summary.today.mismatchCount ?? 0} tone="danger" />
+                  <SummaryStat
+                    label="Bottle Diff"
+                    value={formatSignedBottles(dashboard?.summary.today.totalDiffBottles ?? 0)}
+                  />
+                  <SummaryStat
+                    label="Cash Diff"
+                    value={formatSignedCurrency(dashboard?.summary.today.totalDiffValue ?? 0)}
+                    tone={(dashboard?.summary.today.totalDiffValue ?? 0) < 0 ? "danger" : "default"}
+                  />
+                </div>
+              </article>
+
+              <article className="dashboard-summary-card">
+                <header>
+                  <p className="section-kicker">Cycle</p>
+                  <h3>Cycle Summary</h3>
+                </header>
+                <div className="dashboard-summary-row">
+                  <SummaryStat label="Matched" value={dashboard?.summary.cycle.matchedCount ?? 0} tone="success" />
+                  <SummaryStat label="Mismatch" value={dashboard?.summary.cycle.mismatchCount ?? 0} tone="danger" />
+                  <SummaryStat
+                    label="Bottle Diff"
+                    value={formatSignedBottles(dashboard?.summary.cycle.totalDiffBottles ?? 0)}
+                  />
+                  <SummaryStat
+                    label="Cash Diff"
+                    value={formatSignedCurrency(dashboard?.summary.cycle.totalDiffValue ?? 0)}
+                    tone={(dashboard?.summary.cycle.totalDiffValue ?? 0) < 0 ? "danger" : "default"}
+                  />
+                </div>
+              </article>
             </section>
 
             <section className="dashboard-grid dashboard-grid-single">
@@ -1737,6 +2236,27 @@ function App() {
                                 </div>
                               ) : (
                                 <>
+                                  <section className="shop-nil-stock-card">
+                                    <div className="shop-nil-stock-head">
+                                      <h4>Nil Stock</h4>
+                                      <span
+                                        className={`status-pill ${(shop.nilStock?.totalCount ?? 0) > 0 ? "status-offline" : "status-online"}`}
+                                      >
+                                        {(shop.nilStock?.totalCount ?? 0) > 0 ? shop.nilStock.totalCount : "✓"}
+                                      </span>
+                                    </div>
+                                    {(shop.nilStock?.totalCount ?? 0) > 0 ? (
+                                      <p className="shop-nil-stock-list">
+                                        {(shop.nilStock?.byLocation || [])
+                                          .filter((row) => Number(row.count) > 0)
+                                          .map((row) => `${row.label}: ${row.count}`)
+                                          .join(" | ") || `${shop.nilStock.totalCount} products`}
+                                      </p>
+                                    ) : (
+                                      <p className="shop-nil-stock-list">Nil stock ✓</p>
+                                    )}
+                                  </section>
+
                                   <div className="shop-summary-grid">
                                     <SummaryPanel
                                       title="Today"
@@ -1764,7 +2284,6 @@ function App() {
                                             <span className="mini-label">Today</span>
                                             <ul>
                                               <li>Matched {location.today?.matchedCount ?? 0}</li>
-                                              <li>Unmatched {location.today?.unmatchedCount ?? 0}</li>
                                               <li>Mismatch {location.today?.mismatchCount ?? 0}</li>
                                               <li>Bottle Diff {formatSignedBottles(location.today?.totalDiffBottles ?? 0)}</li>
                                               <li>Cash Diff {formatSignedCurrency(location.today?.totalDiffValue ?? 0)}</li>
@@ -1774,7 +2293,6 @@ function App() {
                                             <span className="mini-label">Cycle</span>
                                             <ul>
                                               <li>Matched {location.cycle?.matchedCount ?? 0}</li>
-                                              <li>Unmatched {location.cycle?.unmatchedCount ?? 0}</li>
                                               <li>Mismatch {location.cycle?.mismatchCount ?? 0}</li>
                                               <li>Bottle Diff {formatSignedBottles(location.cycle?.totalDiffBottles ?? 0)}</li>
                                               <li>Cash Diff {formatSignedCurrency(location.cycle?.totalDiffValue ?? 0)}</li>
@@ -1859,7 +2377,7 @@ function App() {
                   <input
                     value={form.baseUrl}
                     onChange={(event) => setForm((current) => ({ ...current, baseUrl: event.target.value }))}
-                    placeholder="http://192.168.1.10:3010"
+                    placeholder="http://192.168.1.10:4000"
                     required
                   />
                 </label>
@@ -1994,25 +2512,61 @@ function App() {
                   </label>
                   <label>
                     <span>Designation</span>
-                    <input
+                    <select
                       value={workerForm.designationName}
                       onChange={(event) =>
                         setWorkerForm((current) => ({ ...current, designationName: event.target.value }))
                       }
-                      placeholder="Type a designation"
                       required
-                    />
+                    >
+                      <option value="">Select designation</option>
+                      {designations
+                        .filter((row) => row.active)
+                        .map((row) => (
+                          <option key={row.id} value={row.name}>
+                            {row.name}
+                          </option>
+                        ))}
+                    </select>
                   </label>
+                  <div className="form-actions">
+                    <input
+                      value={newDesignationName}
+                      onChange={(event) => setNewDesignationName(event.target.value)}
+                      placeholder="Add new designation"
+                    />
+                    <button className="ghost-button" type="button" onClick={() => void handleAddDesignation()}>
+                      Add
+                    </button>
+                  </div>
                   <label>
                     <span>Work Location</span>
-                    <input
+                    <select
                       value={workerForm.workLocationName}
                       onChange={(event) =>
                         setWorkerForm((current) => ({ ...current, workLocationName: event.target.value }))
                       }
-                      placeholder="Optional"
-                    />
+                    >
+                      <option value="">None</option>
+                      {workLocations
+                        .filter((row) => row.active)
+                        .map((row) => (
+                          <option key={row.id} value={row.name}>
+                            {row.name}
+                          </option>
+                        ))}
+                    </select>
                   </label>
+                  <div className="form-actions">
+                    <input
+                      value={newWorkLocationName}
+                      onChange={(event) => setNewWorkLocationName(event.target.value)}
+                      placeholder="Add new work location"
+                    />
+                    <button className="ghost-button" type="button" onClick={() => void handleAddWorkLocation()}>
+                      Add
+                    </button>
+                  </div>
                   <label>
                     <span>Recommended By</span>
                     <input

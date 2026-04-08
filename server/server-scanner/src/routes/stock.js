@@ -1275,22 +1275,6 @@ function buildLatestFinishedByKey(rows, predicate = null) {
   return latestByKey;
 }
 
-function buildOperatorSetByLocationFromEventRows(rows) {
-  const operatorSet = new Set();
-  const operatorSetByLocation = new Map();
-  for (const row of rows) {
-    const workerId = Number(row.workerId || 0);
-    const locationId = Number(row.shopLocationId || 0);
-    if (!workerId || !locationId) continue;
-    operatorSet.add(workerId);
-    if (!operatorSetByLocation.has(locationId)) {
-      operatorSetByLocation.set(locationId, new Set());
-    }
-    operatorSetByLocation.get(locationId).add(workerId);
-  }
-  return { operatorSet, operatorSetByLocation };
-}
-
 function buildOperatorSetByLocationFromFinishedRows(latestFinishedByKey) {
   const operatorSet = new Set();
   const operatorSetByLocation = new Map();
@@ -1310,83 +1294,29 @@ function buildOperatorSetByLocationFromFinishedRows(latestFinishedByKey) {
 
 function buildOverviewLocationSummaries({
   locations,
-  masterRows,
-  masterByCode,
   latestFinishedByKey,
-  unfinishedCodeMap = new Map(),
   operatorSetByLocation = new Map(),
-  todayMode = false,
 }) {
   return locations.map((location) => {
-    const trackedCodeSet = new Set();
     const scannedRows = [];
     const matchedRows = [];
-    const unmatchedRows = [];
     const mismatchRows = [];
-    const uncheckedRows = [];
-
-    for (const master of masterRows) {
-      const codeKey = normalizeItemCode(master.itemCode);
-      if (!codeKey || trackedCodeSet.has(codeKey)) continue;
-      if (!hasPositiveStockForLocation(master, location)) continue;
-
-      trackedCodeSet.add(codeKey);
-      const latestRow = latestFinishedByKey.get(`${location.id}|${codeKey}`)?.row || null;
-      const unfinishedCodes = unfinishedCodeMap.get(location.id) || new Set();
-
-      if (!latestRow) {
-        if (todayMode || !unfinishedCodes.has(codeKey)) {
-          uncheckedRows.push({
-            itemCode: master.itemCode || "",
-            itemName: master.itemName || "",
-            brandName: master.brandName || "",
-            packValue: master.packValue || "",
-            bpc: Number(master.bpc) || null,
-            mrp: master.mrp ?? null,
-            shopLocationId: location.id,
-            shopLocationName: location.locationName || "",
-          });
-        }
-        continue;
-      }
-
-      scannedRows.push(latestRow);
-      if (isMeaningfulDiffBottles(latestRow.diffBottles) || latestRow.isMatched === false) {
-        const diffRow = buildStockDiffDetailRow(latestRow, master, location);
-        unmatchedRows.push(diffRow);
-        mismatchRows.push(diffRow);
-      } else {
-        matchedRows.push({
-          itemCode: latestRow.itemCode || master.itemCode || "",
-          name: buildDisplayName(
-            latestRow.brandName || master.brandName,
-            latestRow.packValue || master.packValue,
-            latestRow.itemName || master.itemName,
-            latestRow.itemCode || master.itemCode
-          ),
-        });
-      }
-    }
 
     for (const entry of latestFinishedByKey.values()) {
       const latestRow = entry.row;
       if (latestRow.shopLocationId !== location.id) continue;
-      const codeKey = normalizeItemCode(latestRow.itemCode);
-      if (!codeKey || trackedCodeSet.has(codeKey)) continue;
-      const master = masterByCode.get(codeKey) || null;
-      if (!master || !hasPositiveStockForLocation(master, location)) continue;
+
       scannedRows.push(latestRow);
       if (isMeaningfulDiffBottles(latestRow.diffBottles) || latestRow.isMatched === false) {
-        const diffRow = buildStockDiffDetailRow(latestRow, master, location);
-        unmatchedRows.push(diffRow);
+        const diffRow = buildStockDiffDetailRow(latestRow, null, location);
         mismatchRows.push(diffRow);
       } else {
         matchedRows.push({
           itemCode: latestRow.itemCode || "",
           name: buildDisplayName(
-            latestRow.brandName || master?.brandName,
-            latestRow.packValue || master?.packValue,
-            latestRow.itemName || master?.itemName,
+            latestRow.brandName,
+            latestRow.packValue,
+            latestRow.itemName,
             latestRow.itemCode
           ),
         });
@@ -1408,10 +1338,9 @@ function buildOverviewLocationSummaries({
       shopLocationName: location.locationName,
       shopLocationLabel: getLocationLabel(location),
       scannedCount: scannedRows.length,
-      trackedCount: trackedCodeSet.size,
+      trackedCount: scannedRows.length,
       matchedCount: matchedRows.length,
-      unmatchedCount: unmatchedRows.length,
-      uncheckedCount: uncheckedRows.length,
+      uncheckedCount: 0,
       mismatchCount: mismatchRows.length,
       operatorCount: (operatorSetByLocation.get(location.id) || new Set()).size,
       totalDiffBottles,
@@ -1425,18 +1354,7 @@ function buildOverviewLocationSummaries({
         (sum, row) => sum + Math.min(Number(row.priceDiff) || 0, 0),
         0
       ),
-      unmatchedRows: sortNames(
-        unmatchedRows.map((row) => ({
-          name: buildDisplayName(row.brandName, row.packValue, row.itemName, row.itemCode),
-          ...row,
-        }))
-      ),
-      uncheckedRows: sortNames(
-        uncheckedRows.map((row) => ({
-          name: buildDisplayName(row.brandName, row.packValue, row.itemName, row.itemCode),
-          ...row,
-        }))
-      ),
+      uncheckedRows: [],
       matchedRows: sortNames(
         matchedRows.map((row) => ({
           itemCode: row.itemCode,
@@ -1459,7 +1377,6 @@ function buildOverviewSummary(locationSummaries, operatorCount) {
       acc.scannedCount += row.scannedCount;
       acc.trackedCount += row.trackedCount;
       acc.matchedCount += row.matchedCount;
-      acc.unmatchedCount += row.unmatchedCount;
       acc.uncheckedCount += row.uncheckedCount;
       acc.mismatchCount += row.mismatchCount;
       acc.totalDiffBottles += row.totalDiffBottles;
@@ -1470,7 +1387,6 @@ function buildOverviewSummary(locationSummaries, operatorCount) {
       scannedCount: 0,
       trackedCount: 0,
       matchedCount: 0,
-      unmatchedCount: 0,
       uncheckedCount: 0,
       mismatchCount: 0,
       totalDiffBottles: 0,
@@ -1546,14 +1462,7 @@ async function buildCycleStockOverviewDataset({ cycleId = null, shopLocationId =
     throw new Error("No active/current cycle found");
   }
 
-  const [
-    shopInfo,
-    locations,
-    finishedRows,
-    unfinishedRows,
-    eventRows,
-    masterRows,
-  ] = await Promise.all([
+  const [shopInfo, locations, finishedRows, masterRows] = await Promise.all([
     prisma.shopInfo.findUnique({ where: { id: 1 } }),
     prisma.shopLocation.findMany({
       ...(shopLocationId ? { where: { id: Number(shopLocationId) } } : {}),
@@ -1566,52 +1475,15 @@ async function buildCycleStockOverviewDataset({ cycleId = null, shopLocationId =
       },
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
     }),
-    prisma.cycleUnfinishedStock.findMany({
-      where: {
-        cycleId: cycle.id,
-        ...(shopLocationId ? { shopLocationId: Number(shopLocationId) } : {}),
-      },
-      select: {
-        itemCode: true,
-        shopLocationId: true,
-      },
-    }),
-    prisma.cycleProductEvent.findMany({
-      where: {
-        cycleId: cycle.id,
-        workerId: { not: null },
-        ...(shopLocationId ? { shopLocationId: Number(shopLocationId) } : {}),
-      },
-      select: {
-        workerId: true,
-        shopLocationId: true,
-      },
-    }),
     loadMasterProducts({ includeAll: true }),
   ]);
 
-  const masterByCode = new Map(
-    masterRows.map((row) => [normalizeItemCode(row.itemCode), row])
-  );
   const latestFinishedByKey = buildLatestFinishedByKey(finishedRows);
-
-  const unfinishedCodeMap = new Map();
-  for (const row of unfinishedRows) {
-    const codeKey = normalizeItemCode(row.itemCode);
-    if (!codeKey || !row.shopLocationId) continue;
-    if (!unfinishedCodeMap.has(row.shopLocationId)) {
-      unfinishedCodeMap.set(row.shopLocationId, new Set());
-    }
-    unfinishedCodeMap.get(row.shopLocationId).add(codeKey);
-  }
-
-  const { operatorSet, operatorSetByLocation } = buildOperatorSetByLocationFromEventRows(eventRows);
+  const { operatorSet, operatorSetByLocation } =
+    buildOperatorSetByLocationFromFinishedRows(latestFinishedByKey);
   const locationSummaries = buildOverviewLocationSummaries({
     locations,
-    masterRows,
-    masterByCode,
     latestFinishedByKey,
-    unfinishedCodeMap,
     operatorSetByLocation,
   });
   const summary = buildOverviewSummary(locationSummaries, operatorSet.size);
@@ -1627,14 +1499,37 @@ async function buildCycleStockOverviewDataset({ cycleId = null, shopLocationId =
   } = buildOperatorSetByLocationFromFinishedRows(latestTodayFinishedByKey);
   const todayLocationSummaries = buildOverviewLocationSummaries({
     locations,
-    masterRows,
-    masterByCode,
     latestFinishedByKey: latestTodayFinishedByKey,
-    unfinishedCodeMap: new Map(),
     operatorSetByLocation: todayOperatorSetByLocation,
-    todayMode: true,
   });
   const todaySummary = buildOverviewSummary(todayLocationSummaries, todayOperatorSet.size);
+
+  const nilSourceLocationId = parseOptionalPositiveInt(shopInfo?.nilLocation);
+  const nilSourceLocation = nilSourceLocationId
+    ? locations.find((row) => row.id === nilSourceLocationId) || null
+    : null;
+  const nilByLocation = [];
+  let nilTotalCount = 0;
+
+  if (nilSourceLocation) {
+    for (const targetLocation of locations.filter((row) => row.id !== nilSourceLocation.id)) {
+      let targetNilCount = 0;
+      for (const master of masterRows) {
+        const sourceBottles = getMasterStockBottles(master, nilSourceLocation);
+        const targetBottles = getMasterStockBottles(master, targetLocation);
+        if (sourceBottles > 0 && targetBottles <= 0) {
+          targetNilCount += 1;
+        }
+      }
+
+      nilByLocation.push({
+        locationId: targetLocation.id,
+        label: getLocationLabel(targetLocation),
+        count: targetNilCount,
+      });
+      nilTotalCount += targetNilCount;
+    }
+  }
 
   return {
     cycle: {
@@ -1655,6 +1550,13 @@ async function buildCycleStockOverviewDataset({ cycleId = null, shopLocationId =
       summary: todaySummary,
       locations: todayLocationSummaries,
     },
+    nilStock: {
+      sourceLocationId: nilSourceLocation?.id || null,
+      sourceLocationLabel: nilSourceLocation ? getLocationLabel(nilSourceLocation) : "",
+      totalCount: nilTotalCount,
+      byLocation: nilByLocation,
+    },
+    nilCount: nilTotalCount,
     locations: locationSummaries,
   };
 }

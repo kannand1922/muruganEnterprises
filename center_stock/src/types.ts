@@ -2,7 +2,6 @@ export type DashboardMetrics = {
   scannedCount: number;
   trackedCount: number;
   matchedCount: number;
-  unmatchedCount: number;
   uncheckedCount: number;
   mismatchCount: number;
   totalDiffBottles: number;
@@ -45,6 +44,16 @@ export type CentralDashboardShop = {
     operatorCount: number;
     summary: DashboardMetrics | null;
   } | null;
+  nilStock: {
+    sourceLocationId: number | null;
+    sourceLocationLabel: string;
+    totalCount: number;
+    byLocation: Array<{
+      locationId: number;
+      label: string;
+      count: number;
+    }>;
+  };
   locations: MergedLocationSummary[];
   error?: string;
 };
@@ -56,6 +65,7 @@ export type CentralDashboardResponse = {
     shopCount: number;
     onlineShopCount: number;
     offlineShopCount: number;
+    nilStockCount: number;
     cycle: DashboardMetrics;
     today: DashboardMetrics & {
       activityDate: string | null;
@@ -165,6 +175,14 @@ export type WorkerPayload = {
   active?: boolean;
 };
 
+export type WorkerLookupRow = {
+  id: number;
+  name: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type BestSellingProduct = {
   id: number;
   itemCode: string;
@@ -235,7 +253,6 @@ export type StockOverviewLocation = {
   scannedCount: number;
   trackedCount: number;
   matchedCount: number;
-  unmatchedCount: number;
   uncheckedCount: number;
   mismatchCount: number;
   operatorCount: number;
@@ -245,7 +262,6 @@ export type StockOverviewLocation = {
   positiveDiffValue: number;
   negativeDiffValue: number;
   matchedRows: StockOverviewMatchedRow[];
-  unmatchedRows: StockOverviewMismatchRow[];
   uncheckedRows: StockOverviewUncheckedRow[];
   mismatchRows: StockOverviewMismatchRow[];
 };

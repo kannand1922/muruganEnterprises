@@ -239,7 +239,7 @@ export function SettingsCommonConfigPage() {
                     centralBaseUrl: e.detail.value || "",
                   }))
                 }
-                placeholder="http://192.168.1.10:3010"
+                placeholder="http://192.168.1.10:4000"
               />
             </IonItem>
             <IonNote color="medium">

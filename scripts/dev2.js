@@ -7,11 +7,18 @@ const steps = [
   { cmd: "git", args: ["stash"], cwd: rootDir },
   { cmd: "git", args: ["pull"], cwd: rootDir },
   { cmd: "git", args: ["stash", "pop"], cwd: rootDir },
-  { cmd: "npm", args: ["i"], cwd: rootDir },
-  { cmd: "npm", args: ["i"], cwd: path.join(rootDir, "server") },
-  { cmd: "npm", args: ["i"], cwd: path.join(rootDir, "server", "server-scanner") },
   { cmd: "npx", args: ["prisma", "db", "push"], cwd: path.join(rootDir, "server", "server-scanner") },
   { cmd: "npx", args: ["prisma", "generate"], cwd: path.join(rootDir, "server", "server-scanner") },
+  {
+    cmd: "npm",
+    args: ["run", "prisma:dbpush:central"],
+    cwd: path.join(rootDir, "server", "server-scanner"),
+  },
+  {
+    cmd: "npm",
+    args: ["run", "prisma:generate:central"],
+    cwd: path.join(rootDir, "server", "server-scanner"),
+  },
 ];
 
 for (const step of steps) {
