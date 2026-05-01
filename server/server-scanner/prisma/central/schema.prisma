@@ -134,3 +134,94 @@ model ShopEndpoint {
 
   @@map("shop_endpoints")
 }
+
+model AccessUser {
+  id                  Int      @id @default(autoincrement())
+  email               String   @unique
+  role                String   @default("owner")
+  active              Boolean  @default(true)
+  canAccessMasterData Boolean  @default(true) @map("can_access_master_data")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  otpChallenges AccessOtpChallenge[]
+  sessions      AccessSession[]
+  auditLogs     AccessAuditLog[]
+
+  @@index([role, active], map: "idx_access_users_role_active")
+  @@map("access_users")
+}
+
+model AccessOtpChallenge {
+  id         Int      @id @default(autoincrement())
+  userId     Int      @map("user_id")
+  purpose    String   @default("login")
+  otpHash    String   @map("otp_hash")
+  expiresAt  DateTime @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+  attempts   Int      @default(0)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user AccessUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, createdAt], map: "idx_access_otp_challenges_lookup")
+  @@map("access_otp_challenges")
+}
+
+model AccessSession {
+  id                Int       @id @default(autoincrement())
+  userId            Int       @map("user_id")
+  tokenHash         String    @unique @map("token_hash")
+  deviceId          String?   @map("device_id")
+  expiresAt         DateTime  @map("expires_at")
+  masterAccessUntil DateTime? @map("master_access_until")
+  revokedAt         DateTime? @map("revoked_at")
+  lastSeenAt        DateTime  @default(now()) @map("last_seen_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  user AccessUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt], map: "idx_access_sessions_user_expires")
+  @@index([deviceId, expiresAt], map: "idx_access_sessions_device_expires")
+  @@index([revokedAt], map: "idx_access_sessions_revoked")
+  @@map("access_sessions")
+}
+
+model AccessDevice {
+  id                  Int      @id @default(autoincrement())
+  deviceId            String   @unique @map("device_id")
+  deviceLabel         String   @map("device_label")
+  userAgent           String?  @map("user_agent")
+  lastSeenEmail       String?  @map("last_seen_email")
+  active              Boolean  @default(false)
+  canAccessMasterData Boolean  @default(false) @map("can_access_master_data")
+  approvedByEmail     String?  @map("approved_by_email")
+  approvedAt          DateTime? @map("approved_at")
+  lastSeenAt          DateTime @default(now()) @map("last_seen_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@index([active, canAccessMasterData], map: "idx_access_devices_active_master")
+  @@index([lastSeenAt], map: "idx_access_devices_last_seen")
+  @@map("access_devices")
+}
+
+model AccessAuditLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int?     @map("user_id")
+  eventType  String   @map("event_type")
+  success    Boolean  @default(true)
+  email      String?
+  deviceId   String?  @map("device_id")
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  detail     String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user AccessUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([eventType, createdAt], map: "idx_access_audit_logs_event_created")
+  @@index([email, createdAt], map: "idx_access_audit_logs_email_created")
+  @@index([deviceId, createdAt], map: "idx_access_audit_logs_device_created")
+  @@map("access_audit_logs")
+}

@@ -984,6 +984,26 @@
   transform: scale(0.97);
 }
 
+.operator-high-nav-btn {
+  --border-radius: 12px;
+  --background: #fff7ed;
+  --background-activated: #ffedd5;
+  --background-hover: #ffedd5;
+  --color: #9a3412;
+  --border-width: 2px;
+  --border-color: #ea580c;
+  font-weight: 600;
+  font-size: 13px;
+  min-height: 42px;
+  margin: 0;
+  padding: 6px 10px;
+  transition: transform var(--transition-fast);
+}
+
+.operator-high-nav-btn:active, .operator-high-nav-btn:hover {
+  transform: scale(0.97);
+}
+
 .operator-verify-nav-btn {
   --border-radius: 12px;
   --background: #faf5ff;

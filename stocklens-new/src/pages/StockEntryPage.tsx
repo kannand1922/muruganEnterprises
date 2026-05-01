@@ -2298,6 +2298,19 @@ export function StockEntryPage() {
                     LOW STOCK
                   </IonButton>
                   <IonButton
+                    className="operator-high-nav-btn"
+                    disabled={isMasterBlocked}
+                    onClick={() =>
+                      history.push(
+                        currentLocationId
+                          ? `/stock/high-stock?shopLocationId=${encodeURIComponent(String(currentLocationId))}`
+                          : "/stock/high-stock"
+                      )
+                    }
+                  >
+                    HIGH STOCK
+                  </IonButton>
+                  <IonButton
                     className="operator-print-nav-btn"
                     disabled={isMasterBlocked}
                     onClick={() => history.push("/stock/print")}

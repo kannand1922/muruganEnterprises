@@ -1,5 +1,6 @@
-import { type ChangeEvent, type CSSProperties, type FormEvent, useEffect, useState } from "react";
+import { type ChangeEvent, type CSSProperties, type FormEvent, useEffect, useMemo, useState } from "react";
 import {
+  bootstrapCentralOwner,
   createCentralDesignation,
   createCentralBestSelling,
   createCentralShop,
@@ -8,18 +9,31 @@ import {
   deleteCentralBestSelling,
   deleteCentralShop,
   deleteCentralWorker,
+  getCentralAuthStatus,
+  getCentralDevices,
   getCentralDesignations,
   getCentralDashboard,
   getCentralDashboardShopDetail,
   getCentralBestSelling,
+  getCentralMasterProductsByShop,
   getCentralReverseSyncSettings,
+  getCentralSecuritySettings,
+  getCentralSessions,
   getCentralShops,
   getCentralWorkLocations,
   getCentralWorkers,
   getMasterProducts,
+  logoutCentralDeviceSessions,
+  logoutCentralSession,
+  revokeAllCentralSessions,
+  revokeCentralSessionById,
+  requestCentralOtp,
+  unlockCentralAdmin,
   updateCentralReverseSyncSettings,
+  updateCentralDevice,
   updateCentralShop,
   updateCentralWorker,
+  verifyCentralOtp,
 } from "./api";
 import {
   DEFAULT_API_BASE_URL,
@@ -27,12 +41,30 @@ import {
   resetApiBaseUrl,
   setApiBaseUrl,
 } from "./config/env";
+import {
+  clearCentralAdminSession,
+  getCentralAdminExpiry,
+  hasCentralAdminSession,
+  setCentralAdminSession,
+} from "./security/adminSession";
+import {
+  clearCentralAccessSession,
+  getCentralAccessUser,
+  hasCentralAccessSession,
+  setCentralAccessSession,
+} from "./security/centralAccessSession";
 import type {
   BestSellingProduct,
+  CentralAccessDevice,
+  CentralAccessSessionRow,
+  CentralAccessStatus,
   CentralDashboardResponse,
   CentralDashboardShop,
   CentralDashboardShopDetailResponse,
+  CentralMasterProductByShopRow,
+  CentralMasterProductsByShopResponse,
   CentralReverseSyncSettings,
+  CentralSecuritySettings,
   CentralShopEndpoint,
   DashboardMetrics,
   MasterProduct,
@@ -106,7 +138,7 @@ type DocumentFormRow = {
   fileDataBase64: string;
 };
 
-type ActivePage = "dashboard" | "ports" | "operators" | "best-selling";
+type ActivePage = "dashboard" | "master-data" | "ports" | "operators" | "best-selling" | "admin";
 
 type RouteState = {
   page: ActivePage;
@@ -124,9 +156,11 @@ type OperatorOverviewLocation = NonNullable<CentralDashboardShopDetailResponse["
 function getActivePageFromUrl(): ActivePage {
   if (typeof window === "undefined") return "dashboard";
   const rawHash = String(window.location.hash || "").replace(/^#/, "").trim().toLowerCase();
+  if (rawHash === "master-data") return "master-data";
   if (rawHash === "ports") return "ports";
   if (rawHash === "operators") return "operators";
   if (rawHash === "best-selling") return "best-selling";
+  if (rawHash === "admin") return "admin";
   return "dashboard";
 }
 
@@ -154,6 +188,53 @@ function buildHashForRoute(route: RouteState) {
     return `#shop/${route.shopId}`;
   }
   return `#${route.page}`;
+}
+
+function formatLocationStocks(locationStocks: Record<string, string> | null | undefined) {
+  const entries = Object.entries(locationStocks || {}).filter(([, value]) => String(value ?? "").trim() !== "");
+  if (!entries.length) return "—";
+  return entries
+    .map(([key, value]) => `${key}: ${String(value ?? "").trim()}`)
+    .join(" | ");
+}
+
+function MasterDataRowsTable({ rows }: { rows: CentralMasterProductByShopRow[] }) {
+  if (!rows.length) {
+    return <p className="detail-empty">No rows for this shop.</p>;
+  }
+
+  return (
+    <div className="table-wrap">
+      <table className="detail-table master-data-table">
+        <thead>
+          <tr>
+            <th>Brand</th>
+            <th>Item</th>
+            <th>Code</th>
+            <th>Pack</th>
+            <th>Barcode</th>
+            <th>Shop Stock</th>
+            <th>Godown Stock</th>
+            <th>Location Stock</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={`${row.shopId ?? "na"}-${row.itemCode}-${row.packValue}-${index}`}>
+              <td>{row.brandName || "—"}</td>
+              <td>{row.itemName || "—"}</td>
+              <td>{row.itemCode || "—"}</td>
+              <td>{row.packValue || "—"}</td>
+              <td>{row.barcode || "—"}</td>
+              <td>{row.shopStock || "—"}</td>
+              <td>{row.godownStock || "—"}</td>
+              <td>{formatLocationStocks(row.locationStocks || null)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 const EMPTY_WORKER_FORM: WorkerFormState = {
@@ -1052,6 +1133,8 @@ function ShopDetailPage({
     "all"
   );
   const [logResultFilter, setLogResultFilter] = useState<"all" | "matched" | "mismatch">("all");
+  const [activeLocationId, setActiveLocationId] = useState<number | null>(null);
+  const [activeSubTab, setActiveSubTab] = useState<"today" | "cycle" | "operators" | "logs">("today");
 
   useEffect(() => {
     setSearchText("");
@@ -1060,6 +1143,8 @@ function ShopDetailPage({
     setActionFilter("all");
     setProductSectionFilter("all");
     setLogResultFilter("all");
+    setActiveLocationId(null);
+    setActiveSubTab("today");
   }, [shop?.id, detail?.shop.id]);
 
   const overview = detail?.overview;
@@ -1353,191 +1438,255 @@ function ShopDetailPage({
     activityLocation: NonNullable<StockActivityLogResponse["locations"]>[number] | null;
   }>;
 
-  return (
-    <section className="section-card detail-page-shell">
-      <div className="detail-page-back-row">
-        <button className="ghost-button detail-back-button" type="button" onClick={onBack}>
-          ← Back to dashboard
-        </button>
-      </div>
+  const currentLocationId =
+    activeLocationId ?? (filteredLocationEntries[0]?.location.shopLocationId ?? null);
+  const activeEntry =
+    filteredLocationEntries.find((e) => e.location.shopLocationId === currentLocationId) ??
+    filteredLocationEntries[0] ??
+    null;
 
-      <header className="detail-page-header">
-        <div>
-          <p className="section-kicker">Shop Detail</p>
-          <h2>{shop?.shopName || detail?.shop.shopName || detail?.shop.registryName || "Shop"}</h2>
-          <p className="detail-page-subtitle">
-            {shop?.baseUrl || detail?.shop.baseUrl || ""}
-          </p>
-          {overview?.cycle ? (
-            <p className="detail-page-cycle">
-              {overview.cycle.currentCycle ? "Current" : "Latest"} cycle {overview.cycle.sno ?? "-"} ·{" "}
-              {overview.cycle.cycleDate}
-            </p>
-          ) : null}
-        </div>
-        <div className="detail-page-status">
+  const showMatched = productSectionFilter === "all" || productSectionFilter === "matched";
+  const showMismatch = productSectionFilter === "all" || productSectionFilter === "mismatch";
+  const showUnchecked = productSectionFilter === "all" || productSectionFilter === "unchecked";
+
+  return (
+    <div className="sdp-shell">
+      {/* Compact top bar */}
+      <div className="sdp-topbar">
+        <button className="sdp-back" type="button" onClick={onBack}>← Dashboard</button>
+        <div className="sdp-topbar-title">
+          <strong>{shop?.shopName || detail?.shop.shopName || detail?.shop.registryName || "Shop"}</strong>
           <span className={`status-pill status-${shop?.status || detail?.status || "offline"}`}>
             {shop?.status || detail?.status || "offline"}
           </span>
+          {overview?.cycle ? (
+            <span className="sdp-cycle-chip">Cycle {overview.cycle.sno ?? "-"} · {overview.cycle.cycleDate}</span>
+          ) : null}
+          <span className="sdp-url">{shop?.baseUrl || detail?.shop.baseUrl || ""}</span>
         </div>
-      </header>
+      </div>
 
-      {loading ? <p className="detail-empty">Loading full shop details...</p> : null}
+      {loading ? <p className="dash-empty">Loading shop details…</p> : null}
       {!loading && detail?.status === "offline" ? (
-        <div className="shop-error">{detail.message || "Unable to load this shop detail."}</div>
+        <div className="shop-error">{(detail as unknown as { message?: string }).message || "Unable to load this shop."}</div>
       ) : null}
-      {!loading && !detail ? <p className="detail-empty">No detail loaded for this shop.</p> : null}
+      {!loading && !detail ? <p className="dash-empty">No detail loaded.</p> : null}
 
       {!loading && detail?.status === "online" && overview ? (
         <>
-          <section className="detail-filter-panel">
-            <div className="detail-filter-grid">
-              <label className="detail-filter-field detail-filter-field-search">
-                <span>Search</span>
-                <input
-                  type="search"
-                  value={searchText}
-                  onChange={(event) => setSearchText(event.target.value)}
-                  placeholder="Search items, codes, operators, logs, action, pack..."
-                />
-              </label>
-
-              <label className="detail-filter-field">
-                <span>Location</span>
-                <select value={locationFilter} onChange={(event) => setLocationFilter(event.target.value)}>
-                  <option value="all">All locations</option>
-                  {overview.locations.map((location) => (
-                    <option key={location.shopLocationId} value={String(location.shopLocationId)}>
-                      {location.shopLocationLabel} - {location.shopLocationName}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="detail-filter-field">
-                <span>Operator</span>
-                <select value={operatorFilter} onChange={(event) => setOperatorFilter(event.target.value)}>
-                  <option value="all">All operators</option>
-                  {operatorOptions.map((operator) => (
-                    <option key={operator.id} value={String(operator.id)}>
-                      {operator.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="detail-filter-field">
-                <span>Product Rows</span>
-                <select
-                  value={productSectionFilter}
-                  onChange={(event) =>
-                    setProductSectionFilter(event.target.value as "all" | "matched" | "mismatch" | "unchecked")
-                  }
-                >
-                  <option value="all">All</option>
-                  <option value="matched">Matched only</option>
-                  <option value="mismatch">Mismatch only</option>
-                  <option value="unchecked">Unchecked only</option>
-                </select>
-              </label>
-
-              <label className="detail-filter-field">
-                <span>Log Action</span>
-                <select value={actionFilter} onChange={(event) => setActionFilter(event.target.value)}>
-                  <option value="all">All actions</option>
-                  {actionOptions.map((action) => (
-                    <option key={action.key} value={action.key}>
-                      {action.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="detail-filter-field">
-                <span>Log Result</span>
-                <select
-                  value={logResultFilter}
-                  onChange={(event) => setLogResultFilter(event.target.value as "all" | "matched" | "mismatch")}
-                >
-                  <option value="all">All</option>
-                  <option value="matched">Matched</option>
-                  <option value="mismatch">Mismatch</option>
-                </select>
-              </label>
+          {/* KPI strip */}
+          <div className="dash-kpi-strip">
+            <div className="dash-kpi-block">
+              <span className="dash-kpi-label">Today Matched</span>
+              <strong className="dash-kpi-value dash-kpi-green">{overview.today?.summary.matchedCount ?? 0}</strong>
             </div>
-            <div className="detail-filter-actions">
-              <p>
-                Showing <strong>{filteredLocationEntries.length}</strong> of{" "}
-                <strong>{overview.locations.length}</strong> locations
-              </p>
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => {
-                  setSearchText("");
-                  setLocationFilter("all");
-                  setOperatorFilter("all");
-                  setActionFilter("all");
-                  setProductSectionFilter("all");
-                  setLogResultFilter("all");
-                }}
-              >
-                Clear Filters
+            <div className="dash-kpi-block">
+              <span className="dash-kpi-label">Today Mismatch</span>
+              <strong className={`dash-kpi-value ${(overview.today?.summary.mismatchCount ?? 0) > 0 ? "dash-kpi-red" : "dash-kpi-green"}`}>
+                {overview.today?.summary.mismatchCount ?? 0}
+              </strong>
+            </div>
+            <div className="dash-kpi-block">
+              <span className="dash-kpi-label">Today Cash Diff</span>
+              <strong className={`dash-kpi-value ${(overview.today?.summary.totalDiffValue ?? 0) < 0 ? "dash-kpi-red" : ""}`}>
+                {formatSignedCurrency(overview.today?.summary.totalDiffValue ?? 0)}
+              </strong>
+            </div>
+            <div className="dash-kpi-divider" />
+            <div className="dash-kpi-block">
+              <span className="dash-kpi-label">Cycle Matched</span>
+              <strong className="dash-kpi-value dash-kpi-green">{overview.summary.matchedCount}</strong>
+            </div>
+            <div className="dash-kpi-block">
+              <span className="dash-kpi-label">Cycle Mismatch</span>
+              <strong className={`dash-kpi-value ${overview.summary.mismatchCount > 0 ? "dash-kpi-red" : "dash-kpi-green"}`}>
+                {overview.summary.mismatchCount}
+              </strong>
+            </div>
+            <div className="dash-kpi-block">
+              <span className="dash-kpi-label">Cycle Bottle Diff</span>
+              <strong className="dash-kpi-value">{formatSignedBottles(overview.summary.totalDiffBottles)}</strong>
+            </div>
+            <div className="dash-kpi-block">
+              <span className="dash-kpi-label">Cycle Cash Diff</span>
+              <strong className={`dash-kpi-value ${overview.summary.totalDiffValue < 0 ? "dash-kpi-red" : ""}`}>
+                {formatSignedCurrency(overview.summary.totalDiffValue)}
+              </strong>
+            </div>
+          </div>
+
+          {/* Filter row */}
+          <div className="sdp-filter-row">
+            <input
+              className="dash-search"
+              type="search"
+              placeholder="Search items, operators, codes…"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+            <select className="sdp-select" value={operatorFilter} onChange={(e) => setOperatorFilter(e.target.value)}>
+              <option value="all">All operators</option>
+              {operatorOptions.map((op) => (
+                <option key={op.id} value={String(op.id)}>{op.name}</option>
+              ))}
+            </select>
+            <select
+              className="sdp-select"
+              value={productSectionFilter}
+              onChange={(e) => setProductSectionFilter(e.target.value as "all" | "matched" | "mismatch" | "unchecked")}
+            >
+              <option value="all">All products</option>
+              <option value="matched">Matched only</option>
+              <option value="mismatch">Mismatch only</option>
+              <option value="unchecked">Unchecked only</option>
+            </select>
+            <select
+              className="sdp-select"
+              value={logResultFilter}
+              onChange={(e) => setLogResultFilter(e.target.value as "all" | "matched" | "mismatch")}
+            >
+              <option value="all">All logs</option>
+              <option value="matched">Matched logs</option>
+              <option value="mismatch">Mismatch logs</option>
+            </select>
+            {(searchText || operatorFilter !== "all" || productSectionFilter !== "all" || logResultFilter !== "all") ? (
+              <button className="ghost-button" type="button" onClick={() => { setSearchText(""); setOperatorFilter("all"); setProductSectionFilter("all"); setLogResultFilter("all"); }}>
+                Clear
               </button>
-            </div>
-          </section>
-
-          <div className="top-metrics-grid detail-top-metrics">
-            <SummaryStat label="Today Matched" value={overview.today?.summary.matchedCount ?? 0} tone="success" />
-            <SummaryStat label="Today Mismatch" value={overview.today?.summary.mismatchCount ?? 0} tone="danger" />
-            <SummaryStat
-              label="Today Bottle Diff"
-              value={formatSignedBottles(overview.today?.summary.totalDiffBottles ?? 0)}
-            />
-            <SummaryStat
-              label="Cycle Matched"
-              value={overview.summary.matchedCount}
-              tone="success"
-            />
-            <SummaryStat
-              label="Cycle Mismatch"
-              value={overview.summary.mismatchCount}
-              tone="danger"
-            />
-            <SummaryStat
-              label="Cycle Bottle Diff"
-              value={formatSignedBottles(overview.summary.totalDiffBottles)}
-            />
-            <SummaryStat
-              label="Cycle Cash Diff"
-              value={formatSignedCurrency(overview.summary.totalDiffValue)}
-              tone={overview.summary.totalDiffValue < 0 ? "danger" : "default"}
-            />
-          </div>
-
-          <div className="location-page-stack">
-            {filteredLocationEntries.map((entry, index) => (
-              <ShopLocationDetailSection
-                key={`shop-detail-${entry.location.shopLocationId}`}
-                location={entry.location}
-                todayLocation={entry.todayLocation}
-                operatorLocation={entry.operatorLocation}
-                activityLocation={entry.activityLocation}
-                productSectionFilter={productSectionFilter}
-                defaultOpen={index === 0}
-              />
-            ))}
-            {filteredLocationEntries.length === 0 ? (
-              <p className="detail-empty">No rows match current filters.</p>
             ) : null}
+            <span className="sdp-count">{filteredLocationEntries.length} / {overview.locations.length} locations</span>
           </div>
+
+          {/* Location tabs */}
+          {filteredLocationEntries.length > 0 ? (
+            <div className="sdp-location-tabs">
+              {filteredLocationEntries.map((entry) => {
+                const loc = entry.location;
+                const isActive = loc.shopLocationId === currentLocationId;
+                const mismatchTotal = loc.mismatchCount + (entry.todayLocation?.mismatchCount ?? 0);
+                return (
+                  <button
+                    key={loc.shopLocationId}
+                    type="button"
+                    className={`sdp-loc-tab ${isActive ? "sdp-loc-tab-active" : ""}`}
+                    onClick={() => { setActiveLocationId(loc.shopLocationId); setActiveSubTab("today"); }}
+                  >
+                    <span>{loc.shopLocationLabel}</span>
+                    {mismatchTotal > 0 ? <span className="sdp-loc-badge">{mismatchTotal}</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="dash-empty">No locations match current filters.</p>
+          )}
+
+          {/* Active location body */}
+          {activeEntry ? (
+            <div className="sdp-location-body">
+              <div className="sdp-sub-tabs">
+                {(["today", "cycle", "operators", "logs"] as const).map((tab) => {
+                  const counts: Record<string, number> = {
+                    today: activeEntry.todayLocation?.mismatchCount ?? 0,
+                    cycle: activeEntry.location.mismatchCount,
+                    operators: activeEntry.operatorLocation?.operators.length ?? 0,
+                    logs: activeEntry.activityLocation?.logCount ?? 0,
+                  };
+                  const labels: Record<string, string> = { today: "Today", cycle: "Full Cycle", operators: "Operators", logs: "Logs" };
+                  return (
+                    <button key={tab} type="button" className={`sdp-sub-tab ${activeSubTab === tab ? "sdp-sub-tab-active" : ""}`} onClick={() => setActiveSubTab(tab)}>
+                      {labels[tab]}<span className="sdp-sub-count">{counts[tab]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {activeSubTab === "today" ? (
+                <div className="sdp-tab-content">
+                  {activeEntry.todayLocation ? (
+                    <>
+                      <div className="sdp-loc-kpi-row">
+                        <span className="sdp-loc-kpi"><span>Matched</span><strong className="dash-kpi-green">{activeEntry.todayLocation.matchedCount}</strong></span>
+                        <span className="sdp-loc-kpi"><span>Mismatch</span><strong className={activeEntry.todayLocation.mismatchCount > 0 ? "dash-kpi-red" : "dash-kpi-green"}>{activeEntry.todayLocation.mismatchCount}</strong></span>
+                        <span className="sdp-loc-kpi"><span>Unchecked</span><strong>{activeEntry.todayLocation.uncheckedCount}</strong></span>
+                        <span className="sdp-loc-kpi"><span>Bottle Diff</span><strong>{formatSignedBottles(activeEntry.todayLocation.totalDiffBottles)}</strong></span>
+                        <span className="sdp-loc-kpi"><span>Cash Diff</span><strong className={activeEntry.todayLocation.totalDiffValue < 0 ? "dash-kpi-red" : ""}>{formatSignedCurrency(activeEntry.todayLocation.totalDiffValue)}</strong></span>
+                      </div>
+                      {showMismatch && activeEntry.todayLocation.mismatchRows.length > 0 ? (
+                        <div className="sdp-product-section"><div className="sdp-section-label">Mismatch <span>{activeEntry.todayLocation.mismatchRows.length}</span></div><MismatchTable rows={activeEntry.todayLocation.mismatchRows} /></div>
+                      ) : null}
+                      {showUnchecked && activeEntry.todayLocation.uncheckedRows.length > 0 ? (
+                        <div className="sdp-product-section"><div className="sdp-section-label">Unchecked <span>{activeEntry.todayLocation.uncheckedRows.length}</span></div><UncheckedTable rows={activeEntry.todayLocation.uncheckedRows} /></div>
+                      ) : null}
+                      {showMatched && activeEntry.todayLocation.matchedRows.length > 0 ? (
+                        <div className="sdp-product-section"><div className="sdp-section-label">Matched <span>{activeEntry.todayLocation.matchedRows.length}</span></div><MatchedTable rows={activeEntry.todayLocation.matchedRows} /></div>
+                      ) : null}
+                    </>
+                  ) : <p className="dash-empty">No today data for this location.</p>}
+                </div>
+              ) : null}
+
+              {activeSubTab === "cycle" ? (
+                <div className="sdp-tab-content">
+                  <div className="sdp-loc-kpi-row">
+                    <span className="sdp-loc-kpi"><span>Matched</span><strong className="dash-kpi-green">{activeEntry.location.matchedCount}</strong></span>
+                    <span className="sdp-loc-kpi"><span>Mismatch</span><strong className={activeEntry.location.mismatchCount > 0 ? "dash-kpi-red" : "dash-kpi-green"}>{activeEntry.location.mismatchCount}</strong></span>
+                    <span className="sdp-loc-kpi"><span>Unchecked</span><strong>{activeEntry.location.uncheckedCount}</strong></span>
+                    <span className="sdp-loc-kpi"><span>Bottle Diff</span><strong>{formatSignedBottles(activeEntry.location.totalDiffBottles)}</strong></span>
+                    <span className="sdp-loc-kpi"><span>Cash Diff</span><strong className={activeEntry.location.totalDiffValue < 0 ? "dash-kpi-red" : ""}>{formatSignedCurrency(activeEntry.location.totalDiffValue)}</strong></span>
+                  </div>
+                  {showMismatch && activeEntry.location.mismatchRows.length > 0 ? (
+                    <div className="sdp-product-section"><div className="sdp-section-label">Mismatch <span>{activeEntry.location.mismatchRows.length}</span></div><MismatchTable rows={activeEntry.location.mismatchRows} /></div>
+                  ) : null}
+                  {showUnchecked && activeEntry.location.uncheckedRows.length > 0 ? (
+                    <div className="sdp-product-section"><div className="sdp-section-label">Unchecked <span>{activeEntry.location.uncheckedRows.length}</span></div><UncheckedTable rows={activeEntry.location.uncheckedRows} /></div>
+                  ) : null}
+                  {showMatched && activeEntry.location.matchedRows.length > 0 ? (
+                    <div className="sdp-product-section"><div className="sdp-section-label">Matched <span>{activeEntry.location.matchedRows.length}</span></div><MatchedTable rows={activeEntry.location.matchedRows} /></div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {activeSubTab === "operators" ? (
+                <div className="sdp-tab-content"><OperatorLocationSection location={activeEntry.operatorLocation} /></div>
+              ) : null}
+
+              {activeSubTab === "logs" ? (
+                <div className="sdp-tab-content">
+                  {activeEntry.activityLocation ? (
+                    <>
+                      <div className="sdp-loc-kpi-row">
+                        <span className="sdp-loc-kpi"><span>Total Logs</span><strong>{activeEntry.activityLocation.logCount}</strong></span>
+                        <span className="sdp-loc-kpi"><span>Operators</span><strong>{activeEntry.activityLocation.operatorsTouched}</strong></span>
+                        <span className="sdp-loc-kpi"><span>Matched</span><strong className="dash-kpi-green">{activeEntry.activityLocation.matchedCount}</strong></span>
+                        <span className="sdp-loc-kpi"><span>Mismatch</span><strong className={activeEntry.activityLocation.mismatchCount > 0 ? "dash-kpi-red" : "dash-kpi-green"}>{activeEntry.activityLocation.mismatchCount}</strong></span>
+                      </div>
+                      <div className="sdp-filter-row" style={{ marginTop: 8 }}>
+                        <select className="sdp-select" value={actionFilter} onChange={(e) => setActionFilter(e.target.value)}>
+                          <option value="all">All actions</option>
+                          {actionOptions.map((a) => <option key={a.key} value={a.key}>{a.label}</option>)}
+                        </select>
+                      </div>
+                      <ActivityLogTable rows={activeEntry.activityLocation.logs} />
+                    </>
+                  ) : <p className="dash-empty">No activity logs for this location.</p>}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </>
       ) : null}
-    </section>
+    </div>
   );
 }
 
 function App() {
+  const [authStatus, setAuthStatus] = useState<CentralAccessStatus | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authEmailInput, setAuthEmailInput] = useState("");
+  const [authOtpInput, setAuthOtpInput] = useState("");
+  const [authOtpRequestedFor, setAuthOtpRequestedFor] = useState("");
+  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [dashboard, setDashboard] = useState<CentralDashboardResponse | null>(null);
   const [shops, setShops] = useState<CentralShopEndpoint[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -1545,6 +1694,8 @@ function App() {
   const [workLocations, setWorkLocations] = useState<WorkerLookupRow[]>([]);
   const [bestSellingRows, setBestSellingRows] = useState<BestSellingProduct[]>([]);
   const [masterProducts, setMasterProducts] = useState<MasterProduct[]>([]);
+  const [masterProductsByShop, setMasterProductsByShop] =
+    useState<CentralMasterProductsByShopResponse | null>(null);
   const [reverseSyncSettings, setReverseSyncSettings] = useState<CentralReverseSyncSettings>({
     reverseSyncOperatorsEnabled: true,
     reverseSyncBestSellingEnabled: true,
@@ -1555,9 +1706,12 @@ function App() {
   });
   const [detailByShopId, setDetailByShopId] = useState<Record<number, CentralDashboardShopDetailResponse>>({});
   const [openShopIds, setOpenShopIds] = useState<Record<number, boolean>>({});
+  const [shopFilter, setShopFilter] = useState<"all" | "online" | "offline" | "nil-stock" | "mismatch">("all");
+  const [shopSearch, setShopSearch] = useState("");
   const [detailLoadingByShopId, setDetailLoadingByShopId] = useState<Record<number, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [settingsLoading, setSettingsLoading] = useState(true);
+  const [masterDataLoading, setMasterDataLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [workerSaving, setWorkerSaving] = useState(false);
   const [bestSellingSaving, setBestSellingSaving] = useState(false);
@@ -1572,12 +1726,28 @@ function App() {
   const [newWorkLocationName, setNewWorkLocationName] = useState("");
   const [bestSellingQuery, setBestSellingQuery] = useState("");
   const [bestSellingListQuery, setBestSellingListQuery] = useState("");
+  const [masterDataQuery, setMasterDataQuery] = useState("");
+  const [masterDataShopFilter, setMasterDataShopFilter] = useState("all");
+  const [masterDataRowLimit, setMasterDataRowLimit] = useState<"50" | "100" | "250" | "all">("100");
+  const [masterBrandFilter, setMasterBrandFilter] = useState("all");
+  const [masterPackFilter, setMasterPackFilter] = useState("all");
+  const [masterItemNameFilter, setMasterItemNameFilter] = useState("all");
+  const [openMasterShopIds, setOpenMasterShopIds] = useState<Record<number, boolean>>({});
+  const [masterActiveShopId, setMasterActiveShopId] = useState<string>("all");
   const [backendUrlInput, setBackendUrlInput] = useState("");
   const [currentBackendUrl, setCurrentBackendUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [route, setRoute] = useState<RouteState>(() => getRouteFromUrl());
+  const [adminPasswordInput, setAdminPasswordInput] = useState("");
+  const [adminUnlocking, setAdminUnlocking] = useState(false);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminEnabled, setAdminEnabled] = useState(() => hasCentralAdminSession());
+  const [adminExpiry, setAdminExpiry] = useState(() => getCentralAdminExpiry());
+  const [adminSecurity, setAdminSecurity] = useState<CentralSecuritySettings | null>(null);
+  const [adminDevices, setAdminDevices] = useState<CentralAccessDevice[]>([]);
+  const [adminSessions, setAdminSessions] = useState<CentralAccessSessionRow[]>([]);
   const activePage = route.page;
   const selectedShopId = route.shopId;
 
@@ -1585,6 +1755,109 @@ function App() {
     const backend = getApiBaseUrl();
     setBackendUrlInput(backend);
     setCurrentBackendUrl(backend);
+  }
+
+  async function loadAuthStatus() {
+    setAuthLoading(true);
+    try {
+      const status = await getCentralAuthStatus();
+      setAuthStatus(status);
+      if (!authEmailInput.trim()) {
+        setAuthEmailInput(status.user?.email || status.configuredOwnerEmail || "");
+      }
+      if (status.authenticated && status.user && status.expiresAt) {
+        setCentralAccessSession(status.expiresAt, status.user);
+      }
+      if (!status.authenticated) {
+        clearCentralAccessSession();
+        setMasterProductsByShop(null);
+      }
+      setError(null);
+      return status;
+    } catch (statusError) {
+      clearCentralAccessSession();
+      setAuthStatus(null);
+      setError(statusError instanceof Error ? statusError.message : "Failed to load access status");
+      return null;
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleRequestOtp(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const email = authEmailInput.trim().toLowerCase();
+    if (!email) {
+      setError("Email is required.");
+      return;
+    }
+
+    setAuthSubmitting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = authStatus?.needsBootstrap
+        ? await bootstrapCentralOwner(email)
+        : await requestCentralOtp(email);
+      setAuthOtpRequestedFor(result.email);
+      setMessage(`OTP sent to ${result.email}. It expires in ${result.otpTtlMinutes} minutes.`);
+      await loadAuthStatus();
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : "Failed to send OTP");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function handleVerifyOtp(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const email = (authOtpRequestedFor || authEmailInput).trim().toLowerCase();
+    const otp = authOtpInput.trim();
+    if (!email || !otp) {
+      setError("Email and OTP are required.");
+      return;
+    }
+
+    setAuthSubmitting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await verifyCentralOtp(email, otp);
+      setCentralAccessSession(result.expiresAt, result.user);
+      setAuthOtpInput("");
+      setAuthOtpRequestedFor("");
+      await loadAuthStatus();
+      await loadMasterDataByShop(true);
+      setMessage("Master data access verified.");
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : "Failed to verify OTP");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function handleLogoutMasterAccess() {
+    try {
+      await logoutCentralSession();
+    } catch {
+      // Ignore remote logout failure; clear local state anyway.
+    } finally {
+      clearCentralAccessSession();
+      setAuthStatus((current) =>
+        current
+          ? {
+              ...current,
+              authenticated: false,
+              user: null,
+              expiresAt: null,
+            }
+          : current
+      );
+      setAuthOtpInput("");
+      setAuthOtpRequestedFor("");
+      setMasterProductsByShop(null);
+      setMessage("Master data access cleared.");
+    }
   }
 
   async function loadDashboard() {
@@ -1637,9 +1910,158 @@ function App() {
     }
   }
 
+  async function loadMasterDataByShop(forceUnlocked = hasCentralAccessSession()) {
+    if (!forceUnlocked) return;
+    setMasterDataLoading(true);
+    try {
+      const result = await getCentralMasterProductsByShop("", 10000);
+      setMasterProductsByShop(result);
+      setOpenMasterShopIds((current) => {
+        const nextState = { ...current };
+        for (const shop of result.shops) {
+          const shopId = Number(shop.shopId);
+          if (Number.isFinite(shopId) && shopId > 0 && !(shopId in nextState)) {
+            nextState[shopId] = true;
+          }
+        }
+        return nextState;
+      });
+      setError(null);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Failed to load live master data");
+    } finally {
+      setMasterDataLoading(false);
+    }
+  }
+
+  async function loadAdminAccessData() {
+    if (!hasCentralAdminSession()) {
+      setAdminEnabled(false);
+      setAdminExpiry("");
+      setAdminSecurity(null);
+      setAdminDevices([]);
+      setAdminSessions([]);
+      return;
+    }
+
+    setAdminLoading(true);
+    try {
+      const [security, devices, sessions] = await Promise.all([
+        getCentralSecuritySettings(),
+        getCentralDevices(),
+        getCentralSessions(),
+      ]);
+      setAdminEnabled(true);
+      setAdminExpiry(getCentralAdminExpiry());
+      setAdminSecurity(security);
+      setAdminDevices(devices);
+      setAdminSessions(sessions);
+      setError(null);
+    } catch (loadError) {
+      clearCentralAdminSession();
+      setAdminEnabled(false);
+      setAdminExpiry("");
+      setAdminSecurity(null);
+      setAdminDevices([]);
+      setAdminSessions([]);
+      setError(loadError instanceof Error ? loadError.message : "Failed to load admin access data");
+    } finally {
+      setAdminLoading(false);
+    }
+  }
+
+  async function handleUnlockAdmin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!adminPasswordInput.trim()) {
+      setError("Admin password is required");
+      return;
+    }
+    setAdminUnlocking(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await unlockCentralAdmin(adminPasswordInput);
+      setCentralAdminSession(result.token, result.expiresAt);
+      setAdminEnabled(true);
+      setAdminExpiry(result.expiresAt);
+      setAdminPasswordInput("");
+      await loadAdminAccessData();
+      setMessage("Admin mode enabled.");
+    } catch (unlockError) {
+      setError(unlockError instanceof Error ? unlockError.message : "Failed to enable admin mode");
+    } finally {
+      setAdminUnlocking(false);
+    }
+  }
+
+  function handleLogoutAdmin() {
+    clearCentralAdminSession();
+    setAdminEnabled(false);
+    setAdminExpiry("");
+    setAdminSecurity(null);
+    setAdminDevices([]);
+    setAdminSessions([]);
+    setAdminPasswordInput("");
+    setMessage("Admin mode disabled.");
+  }
+
+  async function handleRevokeOneSession(session: CentralAccessSessionRow) {
+    if (!window.confirm(`Logout ${session.email || "this user"} from this device session?`)) return;
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await revokeCentralSessionById(session.id);
+      await loadAdminAccessData();
+      setMessage(`Session revoked for ${result.email || "user"}.`);
+    } catch (revokeError) {
+      setError(revokeError instanceof Error ? revokeError.message : "Failed to revoke session");
+    }
+  }
+
+  async function handleRevokeAllOtpAccess() {
+    if (!window.confirm("Logout all OTP users from central and clear all master access?")) return;
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await revokeAllCentralSessions();
+      await loadAdminAccessData();
+      setMessage(result.message || `Revoked ${result.revokedCount} sessions.`);
+    } catch (revokeError) {
+      setError(revokeError instanceof Error ? revokeError.message : "Failed to revoke all sessions");
+    }
+  }
+
+  async function handleUpdateAdminDevice(
+    device: CentralAccessDevice,
+    payload: { active?: boolean; canAccessMasterData?: boolean }
+  ) {
+    setError(null);
+    setMessage(null);
+    try {
+      await updateCentralDevice(device.id, payload);
+      await loadAdminAccessData();
+      setMessage(`Device updated: ${device.deviceLabel}.`);
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : "Failed to update device");
+    }
+  }
+
+  async function handleLogoutDeviceSessions(device: CentralAccessDevice) {
+    if (!window.confirm(`Logout all OTP sessions for ${device.deviceLabel}?`)) return;
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await logoutCentralDeviceSessions(device.id);
+      await loadAdminAccessData();
+      setMessage(`Logged out ${result.revokedCount} session(s) for ${device.deviceLabel}.`);
+    } catch (logoutError) {
+      setError(logoutError instanceof Error ? logoutError.message : "Failed to logout device sessions");
+    }
+  }
+
   useEffect(() => {
     reloadBackendUrl();
-    void Promise.all([loadDashboard(), loadShops()]);
+    void Promise.all([loadAuthStatus(), loadDashboard(), loadShops()]);
   }, []);
 
   useEffect(() => {
@@ -1679,11 +2101,65 @@ function App() {
     void loadShopDetail(selectedShopId);
   }, [selectedShopId, detailByShopId, detailLoadingByShopId]);
 
+  useEffect(() => {
+    const syncAccessState = () => {
+      const authenticated = hasCentralAccessSession();
+      setAuthStatus((current) =>
+        current
+          ? {
+              ...current,
+              authenticated,
+              user: authenticated ? getCentralAccessUser() : null,
+            }
+          : current
+      );
+      if (!authenticated) {
+        setMasterProductsByShop(null);
+      }
+    };
+
+    syncAccessState();
+    const timerId = window.setInterval(syncAccessState, 30000);
+    return () => window.clearInterval(timerId);
+  }, []);
+
+  useEffect(() => {
+    const syncAdminState = () => {
+      const enabled = hasCentralAdminSession();
+      setAdminEnabled(enabled);
+      setAdminExpiry(enabled ? getCentralAdminExpiry() : "");
+      if (!enabled) {
+        setAdminSecurity(null);
+        setAdminDevices([]);
+        setAdminSessions([]);
+      }
+    };
+
+    syncAdminState();
+    const timerId = window.setInterval(syncAdminState, 30000);
+    return () => window.clearInterval(timerId);
+  }, []);
+
+  useEffect(() => {
+    if (!settingsOpen || !adminEnabled) return;
+    if (adminLoading) return;
+    void loadAdminAccessData();
+  }, [settingsOpen, adminEnabled]);
+
+  useEffect(() => {
+    if (activePage !== "master-data") return;
+    if (!hasCentralAccessSession()) return;
+    if (masterProductsByShop || masterDataLoading) return;
+    void loadMasterDataByShop(true);
+  }, [activePage, masterProductsByShop, masterDataLoading]);
+
   async function handleRefresh() {
     setMessage(null);
     await Promise.all([
       loadDashboard(),
       loadShops(),
+      activePage === "master-data" && hasCentralAccessSession() ? loadMasterDataByShop(true) : Promise.resolve(),
+      adminEnabled ? loadAdminAccessData() : Promise.resolve(),
       selectedShopId ? loadShopDetail(selectedShopId) : Promise.resolve(),
     ]);
   }
@@ -1722,6 +2198,10 @@ function App() {
   }
 
   async function handleDelete(shop: CentralShopEndpoint) {
+    if (!adminEnabled) {
+      setError("Enable admin mode to delete shops.");
+      return;
+    }
     if (!window.confirm(`Delete ${shop.shopName}?`)) return;
     setMessage(null);
     setError(null);
@@ -1778,6 +2258,10 @@ function App() {
   }
 
   async function handleDeleteWorker(worker: Worker) {
+    if (!adminEnabled) {
+      setError("Enable admin mode to delete operators.");
+      return;
+    }
     if (!window.confirm(`Delete operator ${worker.name}?`)) return;
     setError(null);
     setMessage(null);
@@ -1947,6 +2431,10 @@ function App() {
   }
 
   async function handleDeleteBestSelling(row: BestSellingProduct) {
+    if (!adminEnabled) {
+      setError("Enable admin mode to remove best selling products.");
+      return;
+    }
     if (!window.confirm(`Remove ${row.itemCode} from central best selling?`)) return;
     setBestSellingSaving(true);
     setError(null);
@@ -1996,12 +2484,19 @@ function App() {
     setBackendUrlInput(backend);
     setError(null);
     setMessage("Central backend URL reset to default.");
-    void Promise.all([loadDashboard(), loadShops()]);
+    void Promise.all([
+      loadDashboard(),
+      loadShops(),
+      activePage === "master-data" && hasCentralAccessSession() ? loadMasterDataByShop(true) : Promise.resolve(),
+      adminEnabled ? loadAdminAccessData() : Promise.resolve(),
+    ]);
   }
 
   const pageTitle =
     activePage === "dashboard"
       ? "Central summary dashboard"
+      : activePage === "master-data"
+        ? "Live master data by shop"
       : activePage === "ports"
         ? "Port registry"
         : activePage === "operators"
@@ -2010,6 +2505,8 @@ function App() {
   const pageDescription =
     activePage === "dashboard"
       ? "Monitor today and cycle summary shop by shop."
+      : activePage === "master-data"
+        ? "Verify with OTP and review live master CSV rows from every configured shop."
       : activePage === "ports"
         ? "Add shop URLs and manage active shop connections."
         : activePage === "operators"
@@ -2018,6 +2515,123 @@ function App() {
   const selectedShop = dashboard?.shops.find((shop) => shop.id === selectedShopId) || null;
   const selectedShopDetail = selectedShopId ? detailByShopId[selectedShopId] || null : null;
   const selectedShopDetailLoading = selectedShopId ? detailLoadingByShopId[selectedShopId] === true : false;
+  const masterAccessEnabled = Boolean(authStatus?.authenticated && hasCentralAccessSession());
+  const masterSearchTokens = splitSearchTokens(masterDataQuery);
+  const masterAllBrands = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of masterProductsByShop?.rows || []) {
+      if (row.brandName) set.add(row.brandName);
+    }
+    return Array.from(set).sort();
+  }, [masterProductsByShop]);
+  const masterAllPacks = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of masterProductsByShop?.rows || []) {
+      if (row.packValue) set.add(row.packValue);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [masterProductsByShop]);
+  const masterAllItemNames = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of masterProductsByShop?.rows || []) {
+      if (row.itemName) set.add(row.itemName);
+    }
+    return Array.from(set).sort();
+  }, [masterProductsByShop]);
+  const masterVisibleShops = useMemo(() => {
+    const rowLimit = masterDataRowLimit === "all" ? Number.POSITIVE_INFINITY : Number(masterDataRowLimit);
+    const rowBuckets = new Map<number, CentralMasterProductByShopRow[]>();
+
+    for (const row of masterProductsByShop?.rows || []) {
+      const shopId = Number(row.shopId || 0);
+      if (!Number.isFinite(shopId) || shopId <= 0) continue;
+      if (masterDataShopFilter !== "all" && String(shopId) !== masterDataShopFilter) continue;
+      if (masterBrandFilter !== "all" && row.brandName !== masterBrandFilter) continue;
+      if (masterPackFilter !== "all" && row.packValue !== masterPackFilter) continue;
+      if (masterItemNameFilter !== "all" && row.itemName !== masterItemNameFilter) continue;
+      if (
+        masterSearchTokens.length &&
+        !matchesSearchTokens(masterSearchTokens, [
+          row.shopName,
+          row.itemCode,
+          row.itemName,
+          row.brandName,
+          row.packValue,
+          row.barcode,
+        ])
+      ) {
+        continue;
+      }
+
+      const bucket = rowBuckets.get(shopId) || [];
+      bucket.push(row);
+      rowBuckets.set(shopId, bucket);
+    }
+
+    return (masterProductsByShop?.shops || [])
+      .filter((shop) => {
+        const shopId = Number(shop.shopId || 0);
+        if (masterDataShopFilter !== "all" && String(shopId) !== masterDataShopFilter) return false;
+        if (shop.success) {
+          const hasRows = (rowBuckets.get(shopId)?.length || 0) > 0;
+          const hasFilters = masterSearchTokens.length > 0 || masterBrandFilter !== "all" || masterPackFilter !== "all" || masterItemNameFilter !== "all";
+          return hasRows || !hasFilters;
+        }
+        return masterSearchTokens.length === 0 && masterBrandFilter === "all" && masterPackFilter === "all" && masterItemNameFilter === "all";
+      })
+      .map((shop) => {
+        const shopId = Number(shop.shopId || 0);
+        const allRows = rowBuckets.get(shopId) || [];
+        return {
+          ...shop,
+          totalVisibleRows: allRows.length,
+          rows: Number.isFinite(rowLimit) ? allRows.slice(0, rowLimit) : allRows,
+        };
+      });
+  }, [masterDataRowLimit, masterDataQuery, masterDataShopFilter, masterBrandFilter, masterPackFilter, masterItemNameFilter, masterProductsByShop, masterSearchTokens]);
+  const adminDeviceCards = useMemo(() => {
+    const sessionMap = new Map<string, CentralAccessSessionRow[]>();
+    for (const session of adminSessions) {
+      const key = String(session.deviceId || "unknown");
+      const bucket = sessionMap.get(key) || [];
+      bucket.push(session);
+      sessionMap.set(key, bucket);
+    }
+
+    const cards = adminDevices.map((device) => ({
+      device,
+      sessions: sessionMap.get(String(device.deviceId)) || [],
+    }));
+
+    for (const [deviceId, sessions] of sessionMap.entries()) {
+      if (deviceId === "unknown") continue;
+      if (cards.some((card) => String(card.device.deviceId) === deviceId)) continue;
+      cards.push({
+        device: {
+          id: -Math.abs(hashText(deviceId)),
+          deviceId,
+          deviceLabel: sessions[0]?.deviceLabel || deviceId,
+          userAgent: null,
+          lastSeenEmail: sessions[0]?.email || null,
+          active: Boolean(sessions[0]?.deviceActive),
+          canAccessMasterData: Boolean(sessions[0]?.deviceCanAccessMasterData),
+          approvedByEmail: null,
+          approvedAt: null,
+          lastSeenAt: sessions[0]?.lastSeenAt || null,
+          createdAt: sessions[0]?.createdAt || null,
+          updatedAt: null,
+        },
+        sessions,
+      });
+    }
+
+    return cards.sort((left, right) => {
+      if (right.sessions.length !== left.sessions.length) {
+        return right.sessions.length - left.sessions.length;
+      }
+      return String(left.device.deviceLabel || "").localeCompare(String(right.device.deviceLabel || ""));
+    });
+  }, [adminDevices, adminSessions]);
 
   return (
     <main className="app-shell">
@@ -2070,6 +2684,13 @@ function App() {
               Dashboard
             </button>
             <button
+              className={`page-nav-button ${activePage === "master-data" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setRoute({ page: "master-data", shopId: null })}
+            >
+              Master Data
+            </button>
+            <button
               className={`page-nav-button ${activePage === "ports" ? "is-active" : ""}`}
               type="button"
               onClick={() => setRoute({ page: "ports", shopId: null })}
@@ -2090,6 +2711,13 @@ function App() {
             >
               Best Selling
             </button>
+            <button
+              className={`page-nav-button ${activePage === "admin" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => { setRoute({ page: "admin", shopId: null }); if (adminEnabled) void loadAdminAccessData(); }}
+            >
+              Admin
+            </button>
           </section>
         ) : null}
 
@@ -2102,219 +2730,415 @@ function App() {
           />
         ) : null}
 
-        {activePage === "dashboard" && !selectedShopId ? (
-          <>
-            <section className="dashboard-summary-stack">
-              <div className="dashboard-summary-row dashboard-summary-row-meta">
-                <SummaryStat label="Configured Shops" value={dashboard?.summary.shopCount ?? 0} />
-                <SummaryStat label="Online" value={dashboard?.summary.onlineShopCount ?? 0} tone="success" />
-                <SummaryStat label="Offline" value={dashboard?.summary.offlineShopCount ?? 0} tone="warning" />
-                <SummaryStat
-                  label="Nil Stock"
-                  value={dashboard?.summary.nilStockCount ?? 0}
-                  tone={(dashboard?.summary.nilStockCount ?? 0) > 0 ? "warning" : "success"}
-                />
+        {activePage === "dashboard" && !selectedShopId ? (() => {
+          const allShops = dashboard?.shops ?? [];
+          const filteredShops = allShops.filter((shop) => {
+            const searchMatch = shopSearch.trim() === "" || shop.shopName.toLowerCase().includes(shopSearch.toLowerCase());
+            if (!searchMatch) return false;
+            if (shopFilter === "online") return shop.status === "online";
+            if (shopFilter === "offline") return shop.status === "offline";
+            if (shopFilter === "nil-stock") return (shop.nilStock?.totalCount ?? 0) > 0;
+            if (shopFilter === "mismatch") return (shop.today?.summary?.mismatchCount ?? 0) > 0;
+            return true;
+          });
+
+          return (
+            <>
+              {/* KPI strip */}
+              <div className="dash-kpi-strip">
+                <div className="dash-kpi-block">
+                  <span className="dash-kpi-label">Shops</span>
+                  <strong className="dash-kpi-value">{dashboard?.summary.shopCount ?? 0}</strong>
+                </div>
+                <div className="dash-kpi-divider" />
+                <div className="dash-kpi-block">
+                  <span className="dash-kpi-label">Online</span>
+                  <strong className="dash-kpi-value dash-kpi-green">{dashboard?.summary.onlineShopCount ?? 0}</strong>
+                </div>
+                <div className="dash-kpi-block">
+                  <span className="dash-kpi-label">Offline</span>
+                  <strong className="dash-kpi-value dash-kpi-amber">{dashboard?.summary.offlineShopCount ?? 0}</strong>
+                </div>
+                <div className="dash-kpi-block">
+                  <span className="dash-kpi-label">Nil Stock</span>
+                  <strong className={`dash-kpi-value ${(dashboard?.summary.nilStockCount ?? 0) > 0 ? "dash-kpi-amber" : "dash-kpi-green"}`}>
+                    {dashboard?.summary.nilStockCount ?? 0}
+                  </strong>
+                </div>
+                <div className="dash-kpi-divider" />
+                <div className="dash-kpi-block">
+                  <span className="dash-kpi-label">Today Matched</span>
+                  <strong className="dash-kpi-value dash-kpi-green">{dashboard?.summary.today.matchedCount ?? 0}</strong>
+                </div>
+                <div className="dash-kpi-block">
+                  <span className="dash-kpi-label">Today Mismatch</span>
+                  <strong className={`dash-kpi-value ${(dashboard?.summary.today.mismatchCount ?? 0) > 0 ? "dash-kpi-red" : "dash-kpi-green"}`}>
+                    {dashboard?.summary.today.mismatchCount ?? 0}
+                  </strong>
+                </div>
+                <div className="dash-kpi-block">
+                  <span className="dash-kpi-label">Today Cash Diff</span>
+                  <strong className={`dash-kpi-value ${(dashboard?.summary.today.totalDiffValue ?? 0) < 0 ? "dash-kpi-red" : ""}`}>
+                    {formatSignedCurrency(dashboard?.summary.today.totalDiffValue ?? 0)}
+                  </strong>
+                </div>
+                <div className="dash-kpi-divider" />
+                <div className="dash-kpi-block">
+                  <span className="dash-kpi-label">Cycle Matched</span>
+                  <strong className="dash-kpi-value dash-kpi-green">{dashboard?.summary.cycle.matchedCount ?? 0}</strong>
+                </div>
+                <div className="dash-kpi-block">
+                  <span className="dash-kpi-label">Cycle Mismatch</span>
+                  <strong className={`dash-kpi-value ${(dashboard?.summary.cycle.mismatchCount ?? 0) > 0 ? "dash-kpi-red" : "dash-kpi-green"}`}>
+                    {dashboard?.summary.cycle.mismatchCount ?? 0}
+                  </strong>
+                </div>
+                <div className="dash-kpi-block">
+                  <span className="dash-kpi-label">Cycle Cash Diff</span>
+                  <strong className={`dash-kpi-value ${(dashboard?.summary.cycle.totalDiffValue ?? 0) < 0 ? "dash-kpi-red" : ""}`}>
+                    {formatSignedCurrency(dashboard?.summary.cycle.totalDiffValue ?? 0)}
+                  </strong>
+                </div>
               </div>
 
-              <article className="dashboard-summary-card">
-                <header>
-                  <p className="section-kicker">Today</p>
-                  <h3>Today Summary</h3>
-                </header>
-                <div className="dashboard-summary-row">
-                  <SummaryStat label="Matched" value={dashboard?.summary.today.matchedCount ?? 0} tone="success" />
-                  <SummaryStat label="Mismatch" value={dashboard?.summary.today.mismatchCount ?? 0} tone="danger" />
-                  <SummaryStat
-                    label="Bottle Diff"
-                    value={formatSignedBottles(dashboard?.summary.today.totalDiffBottles ?? 0)}
-                  />
-                  <SummaryStat
-                    label="Cash Diff"
-                    value={formatSignedCurrency(dashboard?.summary.today.totalDiffValue ?? 0)}
-                    tone={(dashboard?.summary.today.totalDiffValue ?? 0) < 0 ? "danger" : "default"}
-                  />
-                </div>
-              </article>
-
-              <article className="dashboard-summary-card">
-                <header>
-                  <p className="section-kicker">Cycle</p>
-                  <h3>Cycle Summary</h3>
-                </header>
-                <div className="dashboard-summary-row">
-                  <SummaryStat label="Matched" value={dashboard?.summary.cycle.matchedCount ?? 0} tone="success" />
-                  <SummaryStat label="Mismatch" value={dashboard?.summary.cycle.mismatchCount ?? 0} tone="danger" />
-                  <SummaryStat
-                    label="Bottle Diff"
-                    value={formatSignedBottles(dashboard?.summary.cycle.totalDiffBottles ?? 0)}
-                  />
-                  <SummaryStat
-                    label="Cash Diff"
-                    value={formatSignedCurrency(dashboard?.summary.cycle.totalDiffValue ?? 0)}
-                    tone={(dashboard?.summary.cycle.totalDiffValue ?? 0) < 0 ? "danger" : "default"}
-                  />
-                </div>
-              </article>
-            </section>
-
-            <section className="dashboard-grid dashboard-grid-single">
-              <div className="overview-column">
-                <section className="section-card">
-                  <div className="section-heading">
-                    <div>
-                      <p className="section-kicker">Overview</p>
-                      <h2>Remote shop summaries</h2>
-                    </div>
+              {/* Shop list */}
+              <div className="dash-shop-panel">
+                {/* Filter bar */}
+                <div className="dash-filter-bar">
+                  <div className="dash-filter-tabs">
+                    {(["all", "online", "offline", "nil-stock", "mismatch"] as const).map((f) => (
+                      <button
+                        key={f}
+                        type="button"
+                        className={`dash-filter-tab ${shopFilter === f ? "dash-filter-tab-active" : ""}`}
+                        onClick={() => setShopFilter(f)}
+                      >
+                        {f === "all" ? "All" : f === "nil-stock" ? "Nil Stock" : f.charAt(0).toUpperCase() + f.slice(1)}
+                        {f === "online" && dashboard ? <span className="dash-filter-count">{dashboard.summary.onlineShopCount}</span> : null}
+                        {f === "offline" && dashboard ? <span className="dash-filter-count">{dashboard.summary.offlineShopCount}</span> : null}
+                        {f === "nil-stock" && dashboard ? <span className="dash-filter-count">{dashboard.summary.nilStockCount}</span> : null}
+                        {f === "mismatch" && dashboard ? (
+                          <span className="dash-filter-count">
+                            {allShops.filter((s) => (s.today?.summary?.mismatchCount ?? 0) > 0).length}
+                          </span>
+                        ) : null}
+                      </button>
+                    ))}
                   </div>
+                  <input
+                    className="dash-search"
+                    type="search"
+                    placeholder="Search shops…"
+                    value={shopSearch}
+                    onChange={(e) => setShopSearch(e.target.value)}
+                  />
+                </div>
 
-                  {loading ? <p className="detail-empty">Loading dashboard...</p> : null}
-
-                  {!loading && !dashboard?.shops.length ? (
-                    <div className="empty-state">
-                      <h3>No shops configured</h3>
-                      <p>Add shop URLs in the Ports page to start aggregating stock data.</p>
+                {/* Table header */}
+                {!loading && filteredShops.length > 0 ? (
+                  <div className="dash-table">
+                    <div className="dash-table-head">
+                      <span>Shop</span>
+                      <span>Nil</span>
+                      <span>T. Match</span>
+                      <span>T. Mismatch</span>
+                      <span>T. Cash Δ</span>
+                      <span>C. Match</span>
+                      <span>C. Mismatch</span>
+                      <span></span>
                     </div>
-                  ) : null}
 
-                  <div className="shop-card-stack">
-                    {dashboard?.shops.map((shop) => {
+                    {filteredShops.map((shop) => {
                       const isOnline = shop.status === "online";
-                      const isOpen = openShopIds[shop.id] !== false;
-                      const theme = getShopTheme(shop);
-                      const showRegistryName =
-                        normalizeText(shop.registryName) &&
-                        normalizeText(shop.registryName) !== normalizeText(shop.shopName);
+                      const nilCount = shop.nilStock?.totalCount ?? 0;
+                      const todayMismatch = shop.today?.summary?.mismatchCount ?? 0;
 
                       return (
-                        <article
-                          key={shop.id}
-                          className={`shop-card ${isOnline ? "shop-card-online" : "shop-card-offline"} ${isOpen ? "shop-card-open" : "shop-card-collapsed"}`}
-                          style={
-                            {
-                              "--shop-accent": theme.accent,
-                              "--shop-accent-soft": theme.soft,
-                              "--shop-accent-border": theme.border,
-                            } as CSSProperties
-                          }
-                        >
-                          <header className="shop-card-header">
-                            <div>
-                              <div className="shop-title-row">
-                                <h3>{shop.shopName}</h3>
-                                <span className={`status-pill status-${shop.status}`}>{shop.status}</span>
-                              </div>
-                              {showRegistryName ? <p className="shop-card-subtitle">{shop.registryName}</p> : null}
-                              <a className="shop-card-link" href={shop.baseUrl} target="_blank" rel="noreferrer">
-                                {shop.baseUrl}
-                              </a>
-                              {shop.cycle ? (
-                                <p className="shop-card-cycle">
-                                  {shop.cycle.currentCycle ? "Current" : "Latest"} cycle {shop.cycle.sno ?? "-"} ·{" "}
-                                  {shop.cycle.cycleDate}
-                                </p>
-                              ) : null}
-                            </div>
-                            <div className="shop-card-actions">
-                              {isOnline ? (
-                                <button className="ghost-button" onClick={() => openShopDetail(shop)}>
-                                  Open details
-                                </button>
-                              ) : null}
-                              <button className="ghost-button" type="button" onClick={() => toggleShopAccordion(shop.id)}>
-                                {isOpen ? "Shrink" : "Expand"}
+                        <div key={shop.id} className={`dash-table-row ${isOnline ? "" : "dash-row-offline"}`}>
+                          <div className="dash-shop-name-cell">
+                            <strong>{shop.shopName}</strong>
+                            <span className={`status-pill status-${shop.status}`}>{shop.status}</span>
+                            {shop.cycle ? (
+                              <span className="dash-cycle-chip">Cycle {shop.cycle.sno ?? "-"}</span>
+                            ) : null}
+                          </div>
+
+                          <div className={`dash-cell ${nilCount > 0 ? "dash-cell-warn" : "dash-cell-ok"}`}>
+                            {isOnline ? (nilCount > 0 ? nilCount : "✓") : "—"}
+                          </div>
+
+                          <div className="dash-cell dash-cell-ok">
+                            {isOnline ? (shop.today?.summary?.matchedCount ?? 0) : "—"}
+                          </div>
+
+                          <div className={`dash-cell ${todayMismatch > 0 ? "dash-cell-danger" : "dash-cell-ok"}`}>
+                            {isOnline ? todayMismatch : "—"}
+                          </div>
+
+                          <div className={`dash-cell ${(shop.today?.summary?.totalDiffValue ?? 0) < 0 ? "dash-cell-danger" : ""}`}>
+                            {isOnline ? formatSignedCurrency(shop.today?.summary?.totalDiffValue ?? 0) : "—"}
+                          </div>
+
+                          <div className="dash-cell dash-cell-ok">
+                            {isOnline ? (shop.cycleSummary?.matchedCount ?? 0) : "—"}
+                          </div>
+
+                          <div className={`dash-cell ${(shop.cycleSummary?.mismatchCount ?? 0) > 0 ? "dash-cell-danger" : "dash-cell-ok"}`}>
+                            {isOnline ? (shop.cycleSummary?.mismatchCount ?? 0) : "—"}
+                          </div>
+
+                          <div className="dash-cell dash-cell-action">
+                            {isOnline ? (
+                              <button className="dash-open-btn" type="button" onClick={() => openShopDetail(shop)}>
+                                Open →
                               </button>
-                            </div>
-                          </header>
-
-                          {isOpen ? (
-                            <>
-                              {shop.error ? <div className="shop-error">{shop.error}</div> : null}
-
-                              {!isOnline ? (
-                                <div className="shop-offline-note">
-                                  Central could not fetch `/api/stock/overview` from this shop URL.
-                                </div>
-                              ) : (
-                                <>
-                                  <section className="shop-nil-stock-card">
-                                    <div className="shop-nil-stock-head">
-                                      <h4>Nil Stock</h4>
-                                      <span
-                                        className={`status-pill ${(shop.nilStock?.totalCount ?? 0) > 0 ? "status-offline" : "status-online"}`}
-                                      >
-                                        {(shop.nilStock?.totalCount ?? 0) > 0 ? shop.nilStock.totalCount : "✓"}
-                                      </span>
-                                    </div>
-                                    {(shop.nilStock?.totalCount ?? 0) > 0 ? (
-                                      <p className="shop-nil-stock-list">
-                                        {(shop.nilStock?.byLocation || [])
-                                          .filter((row) => Number(row.count) > 0)
-                                          .map((row) => `${row.label}: ${row.count}`)
-                                          .join(" | ") || `${shop.nilStock.totalCount} products`}
-                                      </p>
-                                    ) : (
-                                      <p className="shop-nil-stock-list">Nil stock ✓</p>
-                                    )}
-                                  </section>
-
-                                  <div className="shop-summary-grid">
-                                    <SummaryPanel
-                                      title="Today"
-                                      subtitle={
-                                        shop.today?.activityDate ? `Activity date ${shop.today.activityDate}` : "Today summary"
-                                      }
-                                      metrics={shop.today?.summary}
-                                    />
-                                    <SummaryPanel
-                                      title="Full Cycle"
-                                      subtitle="Complete cycle summary"
-                                      metrics={shop.cycleSummary}
-                                    />
-                                  </div>
-
-                                  <div className="location-summary-grid">
-                                    {shop.locations.map((location) => (
-                                      <article key={`${shop.id}-${location.shopLocationId}`} className="location-summary-card">
-                                        <div className="location-summary-head">
-                                          <h4>{location.shopLocationLabel}</h4>
-                                          <p>{location.shopLocationName}</p>
-                                        </div>
-                                        <div className="location-summary-columns">
-                                          <div>
-                                            <span className="mini-label">Today</span>
-                                            <ul>
-                                              <li>Matched {location.today?.matchedCount ?? 0}</li>
-                                              <li>Mismatch {location.today?.mismatchCount ?? 0}</li>
-                                              <li>Bottle Diff {formatSignedBottles(location.today?.totalDiffBottles ?? 0)}</li>
-                                              <li>Cash Diff {formatSignedCurrency(location.today?.totalDiffValue ?? 0)}</li>
-                                            </ul>
-                                          </div>
-                                          <div>
-                                            <span className="mini-label">Cycle</span>
-                                            <ul>
-                                              <li>Matched {location.cycle?.matchedCount ?? 0}</li>
-                                              <li>Mismatch {location.cycle?.mismatchCount ?? 0}</li>
-                                              <li>Bottle Diff {formatSignedBottles(location.cycle?.totalDiffBottles ?? 0)}</li>
-                                              <li>Cash Diff {formatSignedCurrency(location.cycle?.totalDiffValue ?? 0)}</li>
-                                            </ul>
-                                          </div>
-                                        </div>
-                                      </article>
-                                    ))}
-                                  </div>
-                                </>
-                              )}
-                            </>
-                          ) : null}
-                        </article>
+                            ) : (
+                              <span className="dash-offline-note">Unreachable</span>
+                            )}
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
-                </section>
+                ) : null}
+
+                {loading ? (
+                  <p className="dash-empty">Loading dashboard…</p>
+                ) : !allShops.length ? (
+                  <div className="dash-empty">
+                    <strong>No shops configured</strong>
+                    <p>Add shop URLs in the Ports page to start.</p>
+                  </div>
+                ) : filteredShops.length === 0 ? (
+                  <p className="dash-empty">No shops match the current filter.</p>
+                ) : null}
               </div>
-            </section>
-          </>
-        ) : null}
+            </>
+          );
+        })() : null}
+
+        {activePage === "master-data" && !selectedShopId ? (() => {
+          const activeShopRows = masterActiveShopId === "all"
+            ? masterVisibleShops.flatMap((s) => s.rows)
+            : (masterVisibleShops.find((s) => String(s.shopId) === masterActiveShopId)?.rows ?? []);
+          const showShopCol = masterActiveShopId === "all";
+
+          return (
+            <div className="md-shell">
+              {/* Top bar */}
+              <div className="md-topbar">
+                <div className="md-topbar-left">
+                  <strong className="md-title">Central Stock</strong>
+                  {masterAccessEnabled ? (
+                    <span className="sdp-cycle-chip">{authStatus?.user?.email || "Verified"}</span>
+                  ) : null}
+                  {masterProductsByShop?.generatedAt ? (
+                    <span className="sdp-url">Updated {formatDateTime(masterProductsByShop.generatedAt)}</span>
+                  ) : null}
+                </div>
+                {masterAccessEnabled ? (
+                  <div className="md-topbar-actions">
+                    <button className="ghost-button" type="button" disabled={masterDataLoading} onClick={() => void loadMasterDataByShop(true)}>
+                      {masterDataLoading ? "Refreshing…" : "Refresh"}
+                    </button>
+                    <button className="ghost-button" type="button" onClick={() => void handleLogoutMasterAccess()}>
+                      Logout
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              {!masterAccessEnabled ? (
+                /* Auth forms */
+                <div className="md-auth-grid">
+                  <div className="md-auth-card">
+                    <form onSubmit={handleRequestOtp}>
+                      <div className="md-auth-head">
+                        <strong>Send OTP</strong>
+                        <span className={authStatus?.mailConfigured ? "md-badge-ok" : "md-badge-warn"}>
+                          {authLoading ? "Checking…" : authStatus?.mailConfigured ? "Mail ready" : "SMTP not set"}
+                        </span>
+                      </div>
+                      <label className="md-field">
+                        <span>Email</span>
+                        <input value={authEmailInput} onChange={(e) => setAuthEmailInput(e.target.value)} placeholder="Enter email" type="email" required />
+                      </label>
+                      {!authStatus?.mailConfigured ? (
+                        <p className="md-note">OTP email cannot be sent until SMTP is configured.</p>
+                      ) : null}
+                      <button className="primary-button" type="submit" disabled={authSubmitting || authLoading}>
+                        {authSubmitting ? "Sending…" : "Send OTP"}
+                      </button>
+                    </form>
+                  </div>
+                  <div className="md-auth-card">
+                    <form onSubmit={handleVerifyOtp}>
+                      <div className="md-auth-head">
+                        <strong>Verify OTP</strong>
+                        <span className={authOtpRequestedFor ? "md-badge-ok" : "md-badge-warn"}>
+                          {authOtpRequestedFor ? "OTP sent" : "Waiting"}
+                        </span>
+                      </div>
+                      <label className="md-field">
+                        <span>Email</span>
+                        <input value={authOtpRequestedFor || authEmailInput} onChange={(e) => setAuthOtpRequestedFor(e.target.value)} placeholder="Enter same email" type="email" required />
+                      </label>
+                      <label className="md-field">
+                        <span>OTP</span>
+                        <input value={authOtpInput} onChange={(e) => setAuthOtpInput(e.target.value)} placeholder="6-digit OTP" inputMode="numeric" required />
+                      </label>
+                      <button className="primary-button" type="submit" disabled={authSubmitting}>
+                        {authSubmitting ? "Verifying…" : "Verify & continue"}
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* KPI strip */}
+                  <div className="dash-kpi-strip">
+                    <div className="dash-kpi-block">
+                      <span className="dash-kpi-label">Shops</span>
+                      <strong className="dash-kpi-value">{masterProductsByShop?.sourceCount ?? 0}</strong>
+                    </div>
+                    <div className="dash-kpi-block">
+                      <span className="dash-kpi-label">Total Rows</span>
+                      <strong className="dash-kpi-value">{masterProductsByShop?.count ?? 0}</strong>
+                    </div>
+                    <div className="dash-kpi-block">
+                      <span className="dash-kpi-label">Unique Codes</span>
+                      <strong className="dash-kpi-value">{masterProductsByShop?.uniqueItemCodeCount ?? 0}</strong>
+                    </div>
+                    <div className="dash-kpi-divider" />
+                    <div className="dash-kpi-block">
+                      <span className="dash-kpi-label">Live</span>
+                      <strong className="dash-kpi-value dash-kpi-green">{masterProductsByShop?.successCount ?? 0}</strong>
+                    </div>
+                    <div className="dash-kpi-block">
+                      <span className="dash-kpi-label">Failed</span>
+                      <strong className={`dash-kpi-value ${(masterProductsByShop?.failureCount ?? 0) > 0 ? "dash-kpi-red" : ""}`}>{masterProductsByShop?.failureCount ?? 0}</strong>
+                    </div>
+                    <div className="dash-kpi-divider" />
+                    <div className="dash-kpi-block">
+                      <span className="dash-kpi-label">Showing</span>
+                      <strong className="dash-kpi-value">{activeShopRows.length}</strong>
+                    </div>
+                  </div>
+
+                  {/* Filters row */}
+                  <div className="md-filters-bar">
+                    <input
+                      className="dash-search"
+                      type="search"
+                      placeholder="Search item, code, barcode…"
+                      value={masterDataQuery}
+                      onChange={(e) => setMasterDataQuery(e.target.value)}
+                    />
+                    <select className="sdp-select" value={masterBrandFilter} onChange={(e) => setMasterBrandFilter(e.target.value)}>
+                      <option value="all">All brands</option>
+                      {masterAllBrands.map((b) => <option key={b} value={b}>{b}</option>)}
+                    </select>
+                    <select className="sdp-select" value={masterItemNameFilter} onChange={(e) => setMasterItemNameFilter(e.target.value)}>
+                      <option value="all">All items</option>
+                      {masterAllItemNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                    <select className="sdp-select" value={masterPackFilter} onChange={(e) => setMasterPackFilter(e.target.value)}>
+                      <option value="all">All pack sizes</option>
+                      {masterAllPacks.map((p) => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                    <select className="sdp-select" value={masterDataRowLimit} onChange={(e) => setMasterDataRowLimit(e.target.value as "50" | "100" | "250" | "all")}>
+                      <option value="50">50 / shop</option>
+                      <option value="100">100 / shop</option>
+                      <option value="250">250 / shop</option>
+                      <option value="all">All</option>
+                    </select>
+                    {(masterDataQuery || masterBrandFilter !== "all" || masterPackFilter !== "all" || masterItemNameFilter !== "all") ? (
+                      <button className="ghost-button" type="button" onClick={() => { setMasterDataQuery(""); setMasterBrandFilter("all"); setMasterPackFilter("all"); setMasterItemNameFilter("all"); }}>
+                        Clear
+                      </button>
+                    ) : null}
+                    <span className="sdp-count">{activeShopRows.length} rows</span>
+                  </div>
+
+                  {/* Shop tabs */}
+                  <div className="sdp-location-tabs">
+                    <button
+                      type="button"
+                      className={`sdp-loc-tab ${masterActiveShopId === "all" ? "sdp-loc-tab-active" : ""}`}
+                      onClick={() => setMasterActiveShopId("all")}
+                    >
+                      All
+                      <span className="sdp-sub-count">{masterVisibleShops.length}</span>
+                    </button>
+                    {masterVisibleShops.map((shop) => {
+                      const sid = String(shop.shopId);
+                      return (
+                        <button
+                          key={sid}
+                          type="button"
+                          className={`sdp-loc-tab ${masterActiveShopId === sid ? "sdp-loc-tab-active" : ""}`}
+                          onClick={() => setMasterActiveShopId(sid)}
+                        >
+                          {shop.shopName}
+                          <span className={`status-pill status-${shop.success ? "online" : "offline"}`} style={{ fontSize: "0.66rem", padding: "2px 6px" }}>
+                            {shop.success ? "live" : "fail"}
+                          </span>
+                          <span className="sdp-sub-count">{shop.rows.length}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Table */}
+                  <div className="md-table-panel">
+                    {masterDataLoading ? (
+                      <p className="dash-empty">Loading master data…</p>
+                    ) : activeShopRows.length === 0 ? (
+                      <p className="dash-empty">No rows match the current filters.</p>
+                    ) : (
+                      <div className="table-wrap">
+                        <table className="detail-table md-table">
+                          <thead>
+                            <tr>
+                              {showShopCol ? <th>Shop</th> : null}
+                              <th>Brand</th>
+                              <th>Item Name</th>
+                              <th>Item Code</th>
+                              <th>Pack Size</th>
+                              <th>BPC</th>
+                              <th>MRP</th>
+                              <th>Barcode</th>
+                              <th>Shop Stock</th>
+                              <th>Godown Stock</th>
+                              <th>Location Stock</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {activeShopRows.map((row, i) => (
+                              <tr key={`${row.shopId ?? "na"}-${row.itemCode}-${row.packValue}-${i}`}>
+                                {showShopCol ? <td className="md-shop-cell">{row.shopName || "—"}</td> : null}
+                                <td>{row.brandName || "—"}</td>
+                                <td>{row.itemName || "—"}</td>
+                                <td className="md-code-cell">{row.itemCode || "—"}</td>
+                                <td>{row.packValue || "—"}</td>
+                                <td className="md-num-cell">{row.bpc ?? "—"}</td>
+                                <td className="md-num-cell">{row.mrp ?? "—"}</td>
+                                <td className="md-code-cell">{row.barcode || "—"}</td>
+                                <td className="md-num-cell">{row.shopStock || "—"}</td>
+                                <td className="md-num-cell">{row.godownStock || "—"}</td>
+                                <td>{formatLocationStocks(row.locationStocks || null)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })() : null}
 
         {activePage === "ports" ? (
           <section className="section-card simple-page">
@@ -2349,7 +3173,13 @@ function App() {
                       <button className="ghost-button" type="button" onClick={() => handleEdit(shop)}>
                         Edit
                       </button>
-                      <button className="danger-button" type="button" onClick={() => void handleDelete(shop)}>
+                      <button
+                        className="danger-button"
+                        type="button"
+                        disabled={!adminEnabled}
+                        title={adminEnabled ? "Delete shop" : "Enable admin mode to delete"}
+                        onClick={() => void handleDelete(shop)}
+                      >
                         Delete
                       </button>
                     </div>
@@ -2474,7 +3304,13 @@ function App() {
                       <button className="ghost-button" type="button" onClick={() => handleEditWorker(worker)}>
                         Edit
                       </button>
-                      <button className="danger-button" type="button" onClick={() => void handleDeleteWorker(worker)}>
+                      <button
+                        className="danger-button"
+                        type="button"
+                        disabled={!adminEnabled}
+                        title={adminEnabled ? "Delete operator" : "Enable admin mode to delete"}
+                        onClick={() => void handleDeleteWorker(worker)}
+                      >
                         Delete
                       </button>
                     </div>
@@ -3059,7 +3895,8 @@ function App() {
                       <button
                         className="danger-button"
                         type="button"
-                        disabled={bestSellingSaving}
+                        disabled={bestSellingSaving || !adminEnabled}
+                        title={adminEnabled ? "Remove product" : "Enable admin mode to remove"}
                         onClick={() => void handleDeleteBestSelling(row)}
                       >
                         Remove
@@ -3109,6 +3946,183 @@ function App() {
               </div>
             </div>
           </section>
+        ) : null}
+
+        {activePage === "admin" && !selectedShopId ? (
+          <div className="adm-shell">
+            {/* Top bar */}
+            <div className="adm-topbar">
+              <div className="adm-topbar-left">
+                <strong className="adm-title">Admin</strong>
+                {adminEnabled ? (
+                  <>
+                    <span className="md-badge-ok">Active</span>
+                    <span className="sdp-url">Until {formatDateTime(adminExpiry || null)}</span>
+                  </>
+                ) : (
+                  <span className="md-badge-warn">Locked</span>
+                )}
+              </div>
+              {adminEnabled ? (
+                <div className="adm-topbar-actions">
+                  <button className="ghost-button" type="button" disabled={adminLoading} onClick={() => void loadAdminAccessData()}>
+                    {adminLoading ? "Refreshing…" : "Refresh"}
+                  </button>
+                  <button className="danger-button" type="button" onClick={() => void handleRevokeAllOtpAccess()}>
+                    Logout all OTP users
+                  </button>
+                  <button className="ghost-button" type="button" onClick={handleLogoutAdmin}>
+                    Exit admin mode
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
+            {!adminEnabled ? (
+              /* Unlock form */
+              <div className="adm-unlock-wrap">
+                <div className="md-auth-card adm-unlock-card">
+                  <div className="md-auth-head">
+                    <strong>Enable admin mode</strong>
+                  </div>
+                  <p className="md-note" style={{ marginBottom: 4 }}>
+                    Enter the admin password to manage devices, sessions, and OTP access.
+                  </p>
+                  <form onSubmit={handleUnlockAdmin} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <label className="md-field">
+                      <span>Admin password</span>
+                      <input type="password" value={adminPasswordInput} onChange={(e) => setAdminPasswordInput(e.target.value)} placeholder="Enter admin password" required />
+                    </label>
+                    <button className="primary-button" type="submit" disabled={adminUnlocking}>
+                      {adminUnlocking ? "Enabling…" : "Enable admin mode"}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* KPI strip */}
+                {adminSecurity ? (
+                  <div className="dash-kpi-strip">
+                    <div className="dash-kpi-block">
+                      <span className="dash-kpi-label">Active Sessions</span>
+                      <strong className="dash-kpi-value">{adminSecurity.activeSessionCount}</strong>
+                    </div>
+                    <div className="dash-kpi-block">
+                      <span className="dash-kpi-label">Devices</span>
+                      <strong className="dash-kpi-value">{adminSecurity.deviceCount}</strong>
+                    </div>
+                    <div className="dash-kpi-block">
+                      <span className="dash-kpi-label">Master Devices</span>
+                      <strong className="dash-kpi-value">{adminSecurity.masterDeviceCount}</strong>
+                    </div>
+                    <div className="dash-kpi-block">
+                      <span className="dash-kpi-label">Session Days</span>
+                      <strong className="dash-kpi-value">{adminSecurity.sessionDays}</strong>
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* Devices table */}
+                <div className="adm-panel">
+                  <div className="adm-panel-head">
+                    <strong>Devices &amp; Users</strong>
+                    <span className="sdp-count">{adminDeviceCards.length} devices</span>
+                  </div>
+
+                  {!adminDeviceCards.length ? (
+                    <p className="dash-empty">No devices recorded yet.</p>
+                  ) : (
+                    adminDeviceCards.map(({ device, sessions }) => (
+                      <div key={`${device.id}-${device.deviceId}`} className="adm-device-block">
+                        {/* Device row */}
+                        <div className="adm-device-row">
+                          <div className="adm-device-info">
+                            <div className="adm-device-name-row">
+                              <strong>{device.deviceLabel || "Unknown device"}</strong>
+                              <span className={`status-pill status-${device.active ? "online" : "offline"}`}>
+                                {device.active ? "approved" : "blocked"}
+                              </span>
+                              <span className={`status-pill status-${device.canAccessMasterData ? "online" : "offline"}`}>
+                                {device.canAccessMasterData ? "master on" : "master off"}
+                              </span>
+                            </div>
+                            <div className="adm-device-meta">
+                              <span>ID: {device.deviceId || "—"}</span>
+                              <span>Last mail: {device.lastSeenEmail || "—"}</span>
+                              <span>Last seen: {formatDateTime(device.lastSeenAt || null)}</span>
+                              <span>Sessions: {sessions.length}</span>
+                            </div>
+                          </div>
+                          {device.id > 0 ? (
+                            <div className="adm-device-actions">
+                              <button className="danger-button" type="button" onClick={() => void handleLogoutDeviceSessions(device)}>
+                                Logout
+                              </button>
+                              <button
+                                className="ghost-button"
+                                type="button"
+                                onClick={() => void handleUpdateAdminDevice(device, { active: !device.active, canAccessMasterData: device.active ? false : device.canAccessMasterData })}
+                              >
+                                {device.active ? "Block" : "Approve"}
+                              </button>
+                              <button
+                                className="ghost-button"
+                                type="button"
+                                disabled={!device.active}
+                                onClick={() => void handleUpdateAdminDevice(device, { canAccessMasterData: !device.canAccessMasterData })}
+                              >
+                                {device.canAccessMasterData ? "Disable master" : "Enable master"}
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+
+                        {/* Sessions table */}
+                        {sessions.length ? (
+                          <div className="table-wrap adm-sessions-table">
+                            <table className="detail-table">
+                              <thead>
+                                <tr>
+                                  <th>User</th>
+                                  <th>Access</th>
+                                  <th>Last seen</th>
+                                  <th>Expires</th>
+                                  <th></th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {sessions.map((session) => (
+                                  <tr key={session.id}>
+                                    <td>
+                                      <div className="item-cell">
+                                        <strong>{session.email || "Unknown"}</strong>
+                                        <span>{session.role || "user"}</span>
+                                      </div>
+                                    </td>
+                                    <td>{session.masterAccessUntil ? "Master" : "Login"}</td>
+                                    <td>{formatDateTime(session.lastSeenAt || null)}</td>
+                                    <td>{formatDateTime(session.expiresAt || null)}</td>
+                                    <td>
+                                      <button className="danger-button" type="button" onClick={() => void handleRevokeOneSession(session)}>
+                                        Logout
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <p className="adm-no-sessions">No active sessions on this device.</p>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         ) : null}
 
         {viewingWorker ? (
@@ -3293,6 +4307,25 @@ function App() {
                 </button>
               </div>
             </form>
+          </section>
+
+          <section className="section-card settings-card">
+            <div className="section-heading">
+              <div>
+                <p className="section-kicker">Admin</p>
+                <h2>Admin mode</h2>
+                <p className="settings-note">Manage devices, sessions, and OTP access.</p>
+              </div>
+            </div>
+            <div className="form-actions">
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => { setSettingsOpen(false); setRoute({ page: "admin", shopId: null }); if (adminEnabled) void loadAdminAccessData(); }}
+              >
+                {adminEnabled ? "Open Admin →" : "Go to Admin →"}
+              </button>
+            </div>
           </section>
         </aside>
       </div>

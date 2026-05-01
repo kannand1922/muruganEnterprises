@@ -202,9 +202,131 @@ export type MasterProduct = {
   barcode?: string | null;
 };
 
+export type CentralMasterProductByShopRow = {
+  shopId: number | null;
+  shopName: string;
+  baseUrl: string;
+  active: boolean;
+  itemCode: string;
+  itemName: string;
+  brandName: string;
+  packValue: string;
+  bpc?: number | null;
+  mrp?: number | null;
+  barcode?: string | null;
+  godownStock?: string | null;
+  shopStock?: string | null;
+  locationStocks?: Record<string, string> | null;
+};
+
+export type CentralMasterProductByShopSummary = {
+  shopId: number | null;
+  shopName: string;
+  baseUrl: string;
+  active: boolean;
+  success: boolean;
+  count: number;
+  sourceFile: string | null;
+  error: string | null;
+};
+
+export type CentralMasterProductsByShopResponse = {
+  success: boolean;
+  generatedAt: string;
+  count: number;
+  uniqueItemCodeCount: number;
+  sourceCount: number;
+  successCount: number;
+  failureCount: number;
+  shops: CentralMasterProductByShopSummary[];
+  rows: CentralMasterProductByShopRow[];
+};
+
 export type CentralReverseSyncSettings = {
   reverseSyncOperatorsEnabled: boolean;
   reverseSyncBestSellingEnabled: boolean;
+};
+
+export type CentralAccessUser = {
+  id: number;
+  email: string;
+  role: string;
+  canAccessMasterData: boolean;
+};
+
+export type CentralAccessStatus = {
+  configured: boolean;
+  needsBootstrap: boolean;
+  mailConfigured: boolean;
+  configuredOwnerEmail?: string | null;
+  sessionDays: number;
+  masterUnlockMinutes?: number;
+  authenticated?: boolean;
+  user?: CentralAccessUser | null;
+  expiresAt?: string | null;
+  masterAccessUntil?: string | null;
+};
+
+export type CentralSecuritySettings = {
+  ownerEmail: string;
+  sessionDays: number;
+  otpTtlMinutes: number;
+  masterUnlockMinutes: number;
+  userCount: number;
+  activeSessionCount: number;
+  deviceCount: number;
+  masterDeviceCount: number;
+};
+
+export type CentralAccessDevice = {
+  id: number;
+  deviceId: string;
+  deviceLabel: string;
+  userAgent?: string | null;
+  lastSeenEmail?: string | null;
+  active: boolean;
+  canAccessMasterData: boolean;
+  approvedByEmail?: string | null;
+  approvedAt?: string | null;
+  lastSeenAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type CentralAccessSessionRow = {
+  id: number;
+  userId: number;
+  email?: string | null;
+  role?: string | null;
+  userActive: boolean;
+  userCanAccessMasterData: boolean;
+  deviceId?: string | null;
+  deviceLabel?: string | null;
+  deviceActive: boolean;
+  deviceCanAccessMasterData: boolean;
+  expiresAt?: string | null;
+  masterAccessUntil?: string | null;
+  lastSeenAt?: string | null;
+  createdAt?: string | null;
+};
+
+export type CentralMasterAccessStatus = {
+  userCanAccessMasterData: boolean;
+  deviceId?: string | null;
+  device?: {
+    id: number;
+    deviceId: string;
+    deviceLabel: string;
+    active: boolean;
+    canAccessMasterData: boolean;
+    approvedByEmail?: string | null;
+    approvedAt?: string | null;
+    lastSeenAt?: string | null;
+    createdAt?: string | null;
+  } | null;
+  unlocked: boolean;
+  expiresAt?: string | null;
+  unlockTtlMinutes: number;
 };
 
 export type StockOverviewMismatchRow = {

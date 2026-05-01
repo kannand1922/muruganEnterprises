@@ -21,6 +21,7 @@ const {
   sendHtmlToPrinterByIp,
 } = require("../services/desktopCompat");
 const { evaluateLowStock, runLowStockCheckAndNotify } = require("../services/lowStockAlerts");
+const { evaluateHighStock } = require("../services/highStockAlerts");
 
 const router = express.Router();
 
@@ -480,6 +481,92 @@ router.get("/api/low-stock/list", async (req, res) => {
     filters: {
       location: requestedLocationCode || "",
       notificationsOnly,
+      ruleType: ruleTypeFilter || "",
+      pack: packFilter || "",
+      search: search || "",
+    },
+    rows: filteredRows,
+  });
+});
+
+router.get("/api/high-stock/list", async (req, res) => {
+  const requestedLocationCode = String(req.query.location || "").trim();
+  const search = String(req.query.search || "").trim().toLowerCase();
+  const ruleTypeFilter = String(req.query.ruleType || "").trim().toLowerCase();
+  const packFilter = String(req.query.pack || "").trim().toLowerCase();
+
+  const { rows } = await getLocationsWithDefault();
+  const locationByCode = new Map(rows.map((row) => [String(row.locationCode || "").trim().toLowerCase(), row]));
+  const requestedLocation = requestedLocationCode
+    ? locationByCode.get(requestedLocationCode.toLowerCase()) || null
+    : null;
+
+  if (requestedLocationCode && !requestedLocation) {
+    return res.status(400).json({
+      success: false,
+      message: `Invalid location code: ${requestedLocationCode}`,
+    });
+  }
+
+  const snapshot = await evaluateHighStock({
+    shopLocationIds: requestedLocation ? [requestedLocation.id] : null,
+  });
+
+  const flattenedRows = [];
+  for (const location of snapshot.locations || []) {
+    for (const row of location.highRows || []) {
+      flattenedRows.push({
+        shopLocationId: location.shopLocationId,
+        locationCode: location.locationCode,
+        locationName: location.locationName,
+        itemCode: row.itemCode,
+        itemName: row.itemName,
+        brandName: row.brandName,
+        packValue: row.packValue,
+        displayName: row.displayName,
+        thresholdBottles: row.thresholdBottles,
+        currentBottles: row.currentBottles,
+        excessBottles: row.excessBottles,
+        ruleType: row.ruleType,
+      });
+    }
+  }
+
+  const filteredRows = flattenedRows.filter((row) => {
+    if (ruleTypeFilter && String(row.ruleType || "").toLowerCase() !== ruleTypeFilter) {
+      return false;
+    }
+    if (packFilter && String(row.packValue || "").trim().toLowerCase() !== packFilter) {
+      return false;
+    }
+    if (!search) return true;
+    const haystack = [
+      row.locationCode,
+      row.locationName,
+      row.itemCode,
+      row.itemName,
+      row.brandName,
+      row.packValue,
+      row.displayName,
+      row.ruleType,
+    ]
+      .map((value) => String(value || "").toLowerCase())
+      .join(" ");
+    return search
+      .split(/\s+/)
+      .filter(Boolean)
+      .every((token) => haystack.includes(token));
+  });
+
+  return res.json({
+    success: true,
+    generatedAt: snapshot.generatedAt,
+    locationCount: snapshot.locationCount,
+    locationsWithHighStock: snapshot.locationsWithHighStock,
+    totalHighProducts: snapshot.totalHighProducts,
+    count: filteredRows.length,
+    filters: {
+      location: requestedLocationCode || "",
       ruleType: ruleTypeFilter || "",
       pack: packFilter || "",
       search: search || "",

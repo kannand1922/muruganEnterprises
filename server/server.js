@@ -47,9 +47,11 @@ const app = express();
 let httpServer;
 let httpsServer;
 let isShuttingDown = false;
+let backgroundServicesStarted = false;
 
 const REQUIRED_BUILD_FILE = path.resolve(stockLensScannerConfigPaths.requiredBuildFile);
 const DEFAULT_HTTPS_PORT = Number(process.env.PRINTER_SERVER_HTTPS_PORT || 4010);
+const CENTRAL_ALLOWED_ORIGINS_FILE = path.resolve(stockLensScannerConfigPaths.centralAllowedOriginsFile);
 
 const renderServerLauncherPage = () => `<!DOCTYPE html>
 <html lang="en">
@@ -256,6 +258,100 @@ const closePrisma = async () => {
   }
 };
 
+function readAllowedOriginsFile(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    return String(raw || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+  } catch {
+    return [];
+  }
+}
+
+function isLocalBrowserOrigin(origin) {
+  try {
+    const parsed = new URL(origin);
+    return ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function buildCorsOptions() {
+  const configuredOrigins = new Set(readAllowedOriginsFile(CENTRAL_ALLOWED_ORIGINS_FILE));
+  return {
+    credentials: true,
+    origin(origin, callback) {
+      if (!origin) {
+        return callback(null, true);
+      }
+      if (configuredOrigins.has(origin) || isLocalBrowserOrigin(origin)) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
+  };
+}
+
+function closeServerInstance(instance) {
+  return new Promise((resolve) => {
+    if (!instance) {
+      resolve();
+      return;
+    }
+    try {
+      instance.close(() => resolve());
+    } catch {
+      resolve();
+    }
+  });
+}
+
+function formatListenError(error, label, port) {
+  if (error && typeof error === "object" && error.code === "EADDRINUSE") {
+    return `${label} port ${port} is already in use. Stop the other process or change the port and try again.`;
+  }
+  return error instanceof Error ? error.message : `Failed to bind ${label} port ${port}`;
+}
+
+function listenOnPort(serverInstance, port, label) {
+  return new Promise((resolve, reject) => {
+    const handleListening = () => {
+      serverInstance.off("error", handleError);
+      resolve();
+    };
+
+    const handleError = (error) => {
+      serverInstance.off("listening", handleListening);
+      reject(new Error(formatListenError(error, label, port)));
+    };
+
+    serverInstance.once("listening", handleListening);
+    serverInstance.once("error", handleError);
+    serverInstance.listen(port, "0.0.0.0");
+  });
+}
+
+async function startBackgroundServices() {
+  if (backgroundServicesStarted) return;
+  backgroundServicesStarted = true;
+  try {
+    await startLowStockMonitor();
+    await Promise.all([
+      startUnfinishedAutoFinishService(),
+      startCentralCatalogSync(),
+    ]);
+  } catch (error) {
+    stopLowStockMonitor();
+    stopUnfinishedAutoFinishService();
+    stopCentralCatalogSync();
+    backgroundServicesStarted = false;
+    throw error;
+  }
+}
+
 const shutdown = (reason, exitCode = 0) => {
   if (isShuttingDown) {
     return;
@@ -264,9 +360,12 @@ const shutdown = (reason, exitCode = 0) => {
   if (reason) {
     console.error(`Shutting down (${reason})...`);
   }
-  stopLowStockMonitor();
-  stopUnfinishedAutoFinishService();
-  stopCentralCatalogSync();
+  if (backgroundServicesStarted) {
+    backgroundServicesStarted = false;
+    stopLowStockMonitor();
+    stopUnfinishedAutoFinishService();
+    stopCentralCatalogSync();
+  }
   const runningServers = [httpServer, httpsServer].filter(Boolean);
   if (runningServers.length > 0) {
     let pending = runningServers.length;
@@ -301,7 +400,7 @@ process.on("unhandledRejection", (reason) => {
   shutdown("unhandledRejection", 1);
 });
 
-app.use(cors());
+app.use(cors(buildCorsOptions()));
 app.use(express.json({ limit: "15mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -415,28 +514,33 @@ async function startServer() {
     app
   );
 
-  httpServer.listen(printerServerPort, "0.0.0.0", () => {
-    console.log(
-      `Thermal printer server running on http://localhost:${printerServerPort}`
-    );
-  });
+  try {
+    await listenOnPort(httpServer, printerServerPort, "HTTP");
+    await listenOnPort(httpsServer, DEFAULT_HTTPS_PORT, "HTTPS");
+  } catch (error) {
+    await Promise.all([
+      closeServerInstance(httpServer),
+      closeServerInstance(httpsServer),
+    ]);
+    httpServer = null;
+    httpsServer = null;
+    throw error;
+  }
 
-  httpsServer.listen(DEFAULT_HTTPS_PORT, "0.0.0.0", () => {
-    console.log(
-      `Thermal printer server running on https://localhost:${DEFAULT_HTTPS_PORT}`
-    );
-    if (httpsCredentials.generated) {
-      console.log("HTTPS cert: auto-generated self-signed development certificate");
-    } else {
-      console.log(`HTTPS cert: ${httpsCredentials.certPath}`);
-      console.log(`HTTPS key: ${httpsCredentials.keyPath}`);
-    }
-  });
+  console.log(
+    `Thermal printer server running on http://localhost:${printerServerPort}`
+  );
+  console.log(
+    `Thermal printer server running on https://localhost:${DEFAULT_HTTPS_PORT}`
+  );
+  if (httpsCredentials.generated) {
+    console.log("HTTPS cert: auto-generated self-signed development certificate");
+  } else {
+    console.log(`HTTPS cert: ${httpsCredentials.certPath}`);
+    console.log(`HTTPS key: ${httpsCredentials.keyPath}`);
+  }
 
   logBrandsCsvModifiedTime();
-  void startLowStockMonitor();
-  void startUnfinishedAutoFinishService();
-  void startCentralCatalogSync();
   console.log("Available endpoints:");
   console.log("  GET  /health - StockLens health");
   console.log("  GET  /new/health - New StockLens health");
@@ -466,6 +570,7 @@ async function startServer() {
     "  POST /api/print/difference-by-person/:date?mode=individual|common&printer=IP - Print person diff report"
   );
   console.log("  GET  /api/print/status - Print status");
+  await startBackgroundServices();
 }
 
 void startServer().catch((error) => {

@@ -1,7 +1,6 @@
 const express = require("express");
 const fs = require("fs");
 const net = require("net");
-const crypto = require("crypto");
 const { prisma } = require("../prisma");
 const { centralPrisma } = require("../centralPrisma");
 const {
@@ -10,6 +9,38 @@ const {
   masterFilePath,
 } = require("../services/masterProducts");
 const { verifySettingsPassword } = require("../services/settingsPassword");
+const {
+  CENTRAL_ADMIN_TOKEN_HEADER,
+  issueCentralAdminToken,
+  validateCentralAdminToken,
+  verifyCentralAdminPassword,
+} = require("../services/centralAdminAuth");
+const {
+  CENTRAL_SESSION_HEADER,
+  CENTRAL_SESSION_COOKIE,
+  CENTRAL_DEVICE_HEADER,
+  CENTRAL_DEVICE_LABEL_HEADER,
+  SESSION_TTL_DAYS,
+  OTP_TTL_MINUTES,
+  MASTER_UNLOCK_TTL_MINUTES,
+  bootstrapOwner,
+  requestLoginOtp,
+  verifyLoginOtp,
+  validateCentralSession,
+  revokeSession,
+  revokeAllCentralSessions,
+  updateOwnerEmail,
+  requestMasterAccessOtp,
+  verifyMasterAccessOtp,
+  revokeMasterAccess,
+  getMasterAccessStatus,
+  getAccessAuthStatus,
+  listActiveCentralSessions,
+  revokeCentralSessionById,
+  revokeCentralSessionsByDevice,
+  listCentralDevices,
+  updateCentralDeviceAccess,
+} = require("../services/centralAccessAuth");
 const {
   getMasterMaxAgeMinutes,
   formatTimestampIST,
@@ -22,6 +53,11 @@ const {
   saveLocationLowStockSettings,
   runLowStockCheckAndNotify,
 } = require("../services/lowStockAlerts");
+const {
+  evaluateHighStock,
+  getLocationHighStockSettings,
+  saveLocationHighStockSettings,
+} = require("../services/highStockAlerts");
 const {
   evaluateNilStock,
   getLocationNilStockSettings,
@@ -46,130 +82,89 @@ const CENTRAL_SYNC_OPERATORS_ENABLED_KEY = "central_sync_operators_enabled";
 const CENTRAL_SYNC_BEST_SELLING_ENABLED_KEY = "central_sync_best_selling_enabled";
 const CENTRAL_REVERSE_SYNC_OPERATORS_ENABLED_KEY = "central_reverse_sync_operators_enabled";
 const CENTRAL_REVERSE_SYNC_BEST_SELLING_ENABLED_KEY = "central_reverse_sync_best_selling_enabled";
-const CENTRAL_SHARED_KEY = String(process.env.CENTRAL_SHARED_KEY || "7429513860174259").trim();
-const CENTRAL_TOKEN_PURPOSE = "central-route-access";
-const CENTRAL_TOKEN_MAX_AGE_SECONDS = Number(process.env.CENTRAL_TOKEN_MAX_AGE_SECONDS || 600);
+const CENTRAL_SESSION_COOKIE_MAX_AGE_MS = SESSION_TTL_DAYS * 24 * 60 * 60 * 1000;
 
-function normalizeIpAddress(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  if (raw.startsWith("::ffff:")) {
-    return raw.slice(7);
-  }
-  if (raw === "::1") {
-    return "127.0.0.1";
-  }
-  return raw;
-}
-
-function isPrivateOrLocalIp(ipValue) {
-  const ip = normalizeIpAddress(ipValue);
-  if (!ip) return false;
-  if (ip === "127.0.0.1") return true;
-  if (ip.startsWith("10.")) return true;
-  if (ip.startsWith("192.168.")) return true;
-  if (ip.startsWith("169.254.")) return true;
-  const parts = ip.split(".").map((part) => Number(part));
-  if (parts.length === 4 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) {
-      return true;
+function readCookie(req, cookieName) {
+  const rawHeader = String(req.headers?.cookie || "");
+  if (!rawHeader) return "";
+  const pairs = rawHeader.split(";").map((entry) => entry.trim());
+  for (const pair of pairs) {
+    if (!pair) continue;
+    const separatorIndex = pair.indexOf("=");
+    const key = separatorIndex >= 0 ? pair.slice(0, separatorIndex).trim() : pair.trim();
+    if (key !== cookieName) continue;
+    const value = separatorIndex >= 0 ? pair.slice(separatorIndex + 1).trim() : "";
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
     }
   }
-  return false;
+  return "";
 }
 
-function toBase64Url(buffer) {
-  return Buffer.from(buffer)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
+function getCentralDeviceId(req) {
+  const headerValue = req.headers[CENTRAL_DEVICE_HEADER];
+  return Array.isArray(headerValue) ? headerValue[0] : headerValue;
 }
 
-function fromBase64Url(value) {
-  const input = String(value || "");
-  const padded = input + "=".repeat((4 - (input.length % 4)) % 4);
-  return Buffer.from(padded.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+function getCentralDeviceLabel(req) {
+  const headerValue = req.headers[CENTRAL_DEVICE_LABEL_HEADER];
+  return Array.isArray(headerValue) ? headerValue[0] : headerValue;
 }
 
-function xorBufferWithKey(buffer, keyText) {
-  const key = Buffer.from(String(keyText || ""), "utf8");
-  if (!key.length) {
-    throw new Error("CENTRAL_SHARED_KEY must not be empty");
+function getRequestIpAddress(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (Array.isArray(forwarded) && forwarded.length) {
+    return String(forwarded[0] || "").split(",")[0].trim();
   }
-  const output = Buffer.alloc(buffer.length);
-  for (let index = 0; index < buffer.length; index += 1) {
-    output[index] = buffer[index] ^ key[index % key.length];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
   }
-  return output;
+  return req.socket?.remoteAddress || req.ip || "";
 }
 
-function buildCentralAccessToken() {
-  const payload = {
-    purpose: CENTRAL_TOKEN_PURPOSE,
-    ts: Math.floor(Date.now() / 1000),
-    nonce: crypto.randomBytes(8).toString("hex"),
+function getCentralSessionToken(req) {
+  const headerValue = req.headers[CENTRAL_SESSION_HEADER];
+  const tokenFromHeader = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  return String(tokenFromHeader || readCookie(req, CENTRAL_SESSION_COOKIE) || "").trim();
+}
+
+function isHttpsRequest(req) {
+  if (req.secure) return true;
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  if (Array.isArray(forwardedProto)) {
+    return String(forwardedProto[0] || "").trim().toLowerCase() === "https";
+  }
+  return String(forwardedProto || "").trim().toLowerCase() === "https";
+}
+
+function setCentralSessionCookie(res, req, token) {
+  res.cookie(CENTRAL_SESSION_COOKIE, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: isHttpsRequest(req),
+    path: "/",
+    maxAge: CENTRAL_SESSION_COOKIE_MAX_AGE_MS,
+  });
+}
+
+function clearCentralSessionCookie(res, req) {
+  res.clearCookie(CENTRAL_SESSION_COOKIE, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: isHttpsRequest(req),
+    path: "/",
+  });
+}
+
+function getCentralRequestMeta(req) {
+  return {
+    deviceId: getCentralDeviceId(req),
+    deviceLabel: getCentralDeviceLabel(req),
+    ipAddress: getRequestIpAddress(req),
+    userAgent: req.headers["user-agent"],
   };
-  const plaintext = Buffer.from(JSON.stringify(payload), "utf8");
-  const encrypted = xorBufferWithKey(plaintext, CENTRAL_SHARED_KEY);
-  return toBase64Url(encrypted);
-}
-
-function decodeCentralAccessToken(token) {
-  try {
-    const encrypted = fromBase64Url(token);
-    const plaintext = xorBufferWithKey(encrypted, CENTRAL_SHARED_KEY);
-    const payload = JSON.parse(plaintext.toString("utf8"));
-    const ts = Number(payload?.ts);
-    if (payload?.purpose !== CENTRAL_TOKEN_PURPOSE) {
-      return { ok: false, message: "Invalid token purpose" };
-    }
-    if (!Number.isFinite(ts)) {
-      return { ok: false, message: "Invalid token timestamp" };
-    }
-    const age = Math.abs(Math.floor(Date.now() / 1000) - Math.trunc(ts));
-    if (age > CENTRAL_TOKEN_MAX_AGE_SECONDS) {
-      return { ok: false, message: "Token expired" };
-    }
-    return { ok: true, payload };
-  } catch (error) {
-    return { ok: false, message: "Invalid auth token" };
-  }
-}
-
-function extractBearerToken(headerValue) {
-  const raw = String(headerValue || "").trim();
-  if (!raw) return "";
-  const parts = raw.split(/\s+/);
-  if (parts.length !== 2 || parts[0].toLowerCase() !== "bearer") {
-    return "";
-  }
-  return parts[1];
-}
-
-function requireCentralAccessToken(req, res, next) {
-  const sourceIp = normalizeIpAddress(req.socket?.remoteAddress);
-  if (isPrivateOrLocalIp(sourceIp)) {
-    return next();
-  }
-
-  const token = extractBearerToken(req.headers.authorization);
-  if (!token) {
-    return res.status(401).json({
-      success: false,
-      message: "Missing central auth token",
-    });
-  }
-
-  const decoded = decodeCentralAccessToken(token);
-  if (!decoded.ok) {
-    return res.status(401).json({
-      success: false,
-      message: decoded.message || "Invalid central auth token",
-    });
-  }
-
-  return next();
 }
 
 function toNullableText(value) {
@@ -230,6 +225,103 @@ function parsePrinterPort(value) {
   const port = Math.trunc(parsed);
   if (port < 1 || port > 65535) return null;
   return port;
+}
+
+function requireCentralAdminAccess(req, res, next) {
+  const headerValue = req.headers[CENTRAL_ADMIN_TOKEN_HEADER];
+  const token = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  const validation = validateCentralAdminToken(token);
+  if (!validation.ok) {
+    return res.status(401).json({
+      success: false,
+      message: validation.message || "Admin access required",
+    });
+  }
+  return next();
+}
+
+async function requireCentralSessionAccess(req, res, next) {
+  const validation = await validateCentralSession(
+    getCentralSessionToken(req),
+    getCentralDeviceId(req),
+    getCentralRequestMeta(req)
+  );
+  if (!validation.ok) {
+    clearCentralSessionCookie(res, req);
+    return res.status(401).json({
+      success: false,
+      message: validation.message || "Central login required",
+    });
+  }
+  req.centralAccessUser = validation.user;
+  req.centralAccessSession = validation.session;
+  return next();
+}
+
+async function requireCentralMasterAccess(req, res, next) {
+  const validation = await validateCentralSession(
+    getCentralSessionToken(req),
+    getCentralDeviceId(req),
+    getCentralRequestMeta(req)
+  );
+  if (!validation.ok) {
+    clearCentralSessionCookie(res, req);
+    return res.status(401).json({
+      success: false,
+      message: validation.message || "OTP verification is required to access master data",
+    });
+  }
+  req.centralAccessUser = validation.user;
+  req.centralAccessSession = validation.session;
+  return next();
+}
+
+function requireCentralOwner(req, res, next) {
+  const role = String(req.centralAccessUser?.role || "").trim().toLowerCase();
+  if (role !== "owner") {
+    return res.status(403).json({
+      success: false,
+      message: "Owner access required",
+    });
+  }
+  return next();
+}
+
+async function requireCentralOwnerOrAdminAccess(req, res, next) {
+  const headerValue = req.headers[CENTRAL_ADMIN_TOKEN_HEADER];
+  const token = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  const adminValidation = validateCentralAdminToken(token);
+  if (adminValidation.ok) {
+    req.centralAdmin = {
+      enabled: true,
+      expiresAt: adminValidation.expiresAt,
+    };
+    return next();
+  }
+
+  const validation = await validateCentralSession(
+    getCentralSessionToken(req),
+    getCentralDeviceId(req),
+    getCentralRequestMeta(req)
+  );
+  if (!validation.ok) {
+    clearCentralSessionCookie(res, req);
+    return res.status(401).json({
+      success: false,
+      message: "Owner login or admin mode is required",
+    });
+  }
+
+  req.centralAccessUser = validation.user;
+  req.centralAccessSession = validation.session;
+  const role = String(validation.user?.role || "").trim().toLowerCase();
+  if (role !== "owner") {
+    return res.status(403).json({
+      success: false,
+      message: "Owner access required",
+    });
+  }
+  return next();
 }
 
 function isValidPrinterIp(value) {
@@ -537,38 +629,10 @@ function sortMasterProducts(rows) {
 }
 
 async function readAggregatedCentralMasterProducts({ query = "", limit = 10000 } = {}) {
-  const activeEndpoints = await centralPrisma.shopEndpoint.findMany({
-    where: { active: true },
-    orderBy: [{ shopName: "asc" }, { id: "asc" }],
+  const { activeEndpoints, remoteResponses } = await fetchCentralMasterProductsByShop({
+    query,
+    limit,
   });
-
-  const remoteResponses = await Promise.all(
-    activeEndpoints.map(async (endpoint) => {
-      try {
-        const payload = await fetchJsonWithTimeout(
-          buildRemoteApiUrl(endpoint.baseUrl, "/api/meta/master-products", {
-            query,
-            limit,
-            includeAll: true,
-          }),
-          {},
-          12000
-        );
-        return {
-          endpoint,
-          success: true,
-          rows: Array.isArray(payload?.rows) ? payload.rows : [],
-        };
-      } catch (error) {
-        return {
-          endpoint,
-          success: false,
-          rows: [],
-          error: error instanceof Error ? error.message : "Failed to load master products",
-        };
-      }
-    })
-  );
 
   const mergedByCode = new Map();
 
@@ -600,6 +664,102 @@ async function readAggregatedCentralMasterProducts({ query = "", limit = 10000 }
         error: row.error,
       })),
   };
+}
+
+async function fetchCentralMasterProductsByShop({ query = "", limit = 10000 } = {}) {
+  const activeEndpoints = await centralPrisma.shopEndpoint.findMany({
+    where: { active: true },
+    orderBy: [{ shopName: "asc" }, { id: "asc" }],
+  });
+
+  const remoteResponses = await Promise.all(
+    activeEndpoints.map(async (endpoint) => {
+      try {
+        const payload = await fetchJsonWithTimeout(
+          buildRemoteApiUrl(endpoint.baseUrl, "/api/meta/master-products", {
+            query,
+            limit,
+            includeAll: true,
+          }),
+          {},
+          12000
+        );
+        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        return {
+          endpoint,
+          success: true,
+          count: rows.length,
+          rows,
+          sourceFile: payload?.sourceFile || null,
+        };
+      } catch (error) {
+        return {
+          endpoint,
+          success: false,
+          count: 0,
+          rows: [],
+          sourceFile: null,
+          error: error instanceof Error ? error.message : "Failed to load master products",
+        };
+      }
+    })
+  );
+
+  return {
+    activeEndpoints,
+    remoteResponses,
+  };
+}
+
+function flattenCentralMasterProductsByShop(remoteResponses = []) {
+  const rows = [];
+
+  for (const response of remoteResponses) {
+    if (!response?.success) continue;
+    const endpoint = response.endpoint || {};
+    for (const row of response.rows || []) {
+      rows.push({
+        shopId: Number(endpoint.id) || null,
+        shopName: String(endpoint.shopName || "").trim(),
+        baseUrl: String(endpoint.baseUrl || "").trim(),
+        active: Boolean(endpoint.active),
+        itemCode: row?.itemCode || "",
+        itemName: row?.itemName || "",
+        brandName: row?.brandName || "",
+        packValue: row?.packValue || "",
+        bpc: row?.bpc ?? null,
+        mrp: row?.mrp ?? null,
+        barcode: row?.barcode || "",
+        godownStock: row?.godownStock || "",
+        shopStock: row?.shopStock || "",
+        locationStocks:
+          row?.locationStocks && typeof row.locationStocks === "object" ? row.locationStocks : {},
+      });
+    }
+  }
+
+  return rows.sort((a, b) => {
+    const shopDiff = String(a?.shopName || "").localeCompare(String(b?.shopName || ""));
+    if (shopDiff !== 0) return shopDiff;
+    const brandDiff = String(a?.brandName || "").localeCompare(String(b?.brandName || ""));
+    if (brandDiff !== 0) return brandDiff;
+    const itemDiff = String(a?.itemName || "").localeCompare(String(b?.itemName || ""));
+    if (itemDiff !== 0) return itemDiff;
+    return String(a?.itemCode || "").localeCompare(String(b?.itemCode || ""));
+  });
+}
+
+function summarizeCentralMasterProductShops(remoteResponses = []) {
+  return remoteResponses.map((response) => ({
+    shopId: Number(response?.endpoint?.id) || null,
+    shopName: String(response?.endpoint?.shopName || "").trim(),
+    baseUrl: String(response?.endpoint?.baseUrl || "").trim(),
+    active: Boolean(response?.endpoint?.active),
+    success: Boolean(response?.success),
+    count: Number(response?.count) || 0,
+    sourceFile: response?.sourceFile || null,
+    error: response?.success ? null : response?.error || "Failed to load master products",
+  }));
 }
 
 function createOfflineDashboardShop(endpoint, error) {
@@ -743,9 +903,6 @@ async function pushCentralCatalogToShops(resource, options = {}) {
           buildRemoteApiUrl(endpoint.baseUrl, "/api/meta/central-sync/apply"),
           {
             method: "POST",
-            headers: {
-              authorization: `Bearer ${buildCentralAccessToken()}`,
-            },
             body: JSON.stringify(payload),
           }
         );
@@ -785,9 +942,6 @@ async function forwardCatalogWriteToCentral(settings, path, method, payload = nu
 
   return fetchJsonWithTimeout(buildRemoteApiUrl(settings.centralBaseUrl, path), {
     method,
-    headers: {
-      authorization: `Bearer ${buildCentralAccessToken()}`,
-    },
     ...(payload == null ? {} : { body: JSON.stringify(payload) }),
   });
 }
@@ -1209,6 +1363,306 @@ router.post("/settings-auth", async (req, res) => {
   });
 });
 
+router.get("/central/auth/status", async (req, res) => {
+  const status = await getAccessAuthStatus(
+    getCentralSessionToken(req),
+    getCentralDeviceId(req),
+    getCentralRequestMeta(req)
+  );
+  return res.json({ success: true, data: status });
+});
+
+router.post("/central/auth/bootstrap", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const user = await bootstrapOwner(email);
+    const result = await requestLoginOtp(user.email, getCentralRequestMeta(req));
+    return res.json({
+      success: true,
+      data: {
+        email: result.email,
+        expiresAt: result.expiresAt,
+        sessionDays: SESSION_TTL_DAYS,
+        otpTtlMinutes: OTP_TTL_MINUTES,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to configure owner access";
+    return res.status(400).json({ success: false, message });
+  }
+});
+
+router.post("/central/auth/request-otp", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+
+    const result = await requestLoginOtp(email, getCentralRequestMeta(req));
+    return res.json({
+      success: true,
+      data: {
+        email: result.email,
+        expiresAt: result.expiresAt,
+        sessionDays: SESSION_TTL_DAYS,
+        otpTtlMinutes: OTP_TTL_MINUTES,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to send OTP";
+    return res.status(400).json({ success: false, message });
+  }
+});
+
+router.post("/central/auth/verify-otp", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const otp = String(req.body?.otp || "").trim();
+    if (!email || !otp) {
+      return res.status(400).json({ success: false, message: "Email and OTP are required" });
+    }
+
+    const result = await verifyLoginOtp(email, otp, getCentralRequestMeta(req));
+    setCentralSessionCookie(res, req, result.token);
+    return res.json({
+      success: true,
+      data: {
+        expiresAt: result.expiresAt,
+        user: result.user,
+        sessionDays: SESSION_TTL_DAYS,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to verify OTP";
+    return res.status(400).json({ success: false, message });
+  }
+});
+
+router.post("/central/auth/logout", requireCentralSessionAccess, async (req, res) => {
+  await revokeSession(getCentralSessionToken(req), getCentralRequestMeta(req));
+  clearCentralSessionCookie(res, req);
+  return res.json({ success: true, message: "Logged out" });
+});
+
+router.get("/central/auth/me", requireCentralSessionAccess, async (req, res) => {
+  return res.json({
+    success: true,
+    data: {
+      user: req.centralAccessUser,
+      session: req.centralAccessSession,
+      sessionDays: SESSION_TTL_DAYS,
+      masterUnlockMinutes: MASTER_UNLOCK_TTL_MINUTES,
+    },
+  });
+});
+
+router.get("/central/auth/security", requireCentralOwnerOrAdminAccess, async (req, res) => {
+  const [userCount, activeSessionCount, deviceCount, masterDeviceCount] = await Promise.all([
+    centralPrisma.accessUser.count(),
+    centralPrisma.accessSession.count({
+      where: {
+        revokedAt: null,
+        expiresAt: {
+          gt: new Date(),
+        },
+      },
+    }),
+    centralPrisma.accessDevice.count(),
+    centralPrisma.accessDevice.count({
+      where: {
+        active: true,
+        canAccessMasterData: true,
+      },
+    }),
+  ]);
+
+  return res.json({
+    success: true,
+    data: {
+      ownerEmail: req.centralAccessUser?.email || null,
+      sessionDays: SESSION_TTL_DAYS,
+      otpTtlMinutes: OTP_TTL_MINUTES,
+      masterUnlockMinutes: MASTER_UNLOCK_TTL_MINUTES,
+      userCount,
+      activeSessionCount,
+      deviceCount,
+      masterDeviceCount,
+    },
+  });
+});
+
+router.put("/central/auth/security/owner-email", requireCentralSessionAccess, requireCentralOwner, async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const updated = await updateOwnerEmail(req.centralAccessUser.id, email, req.centralAccessUser);
+    return res.json({
+      success: true,
+      data: {
+        ownerEmail: updated.email,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to update owner email";
+    return res.status(400).json({ success: false, message });
+  }
+});
+
+router.post("/central/auth/security/revoke-all", requireCentralOwnerOrAdminAccess, async (req, res) => {
+  const result = await revokeAllCentralSessions(req.centralAccessUser || { email: "central-admin" });
+  if (req.centralAccessSession) {
+    clearCentralSessionCookie(res, req);
+  }
+  return res.json({
+    success: true,
+    data: {
+      ...result,
+      message: "All central sessions were revoked. Everyone must login again.",
+    },
+  });
+});
+
+router.get("/central/auth/devices", requireCentralOwnerOrAdminAccess, async (req, res) => {
+  const rows = await listCentralDevices();
+  return res.json({ success: true, rows });
+});
+
+router.patch("/central/auth/devices/:id", requireCentralOwnerOrAdminAccess, async (req, res) => {
+  try {
+    const row = await updateCentralDeviceAccess(
+      req.params.id,
+      req.body || {},
+      req.centralAccessUser?.email || "central-admin"
+    );
+    return res.json({ success: true, data: row });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to update device";
+    return res.status(400).json({ success: false, message });
+  }
+});
+
+router.get("/central/auth/sessions", requireCentralOwnerOrAdminAccess, async (req, res) => {
+  const rows = await listActiveCentralSessions();
+  return res.json({ success: true, rows });
+});
+
+router.post("/central/auth/sessions/:id/revoke", requireCentralOwnerOrAdminAccess, async (req, res) => {
+  try {
+    const result = await revokeCentralSessionById(req.params.id, {
+      id: req.centralAccessUser?.id || null,
+      email: req.centralAccessUser?.email || "central-admin",
+      deviceId: getCentralDeviceId(req),
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to revoke session";
+    return res.status(400).json({ success: false, message });
+  }
+});
+
+router.post("/central/auth/devices/:id/logout", requireCentralOwnerOrAdminAccess, async (req, res) => {
+  try {
+    const device = await centralPrisma.accessDevice.findUnique({
+      where: { id: Number(req.params.id) || 0 },
+    });
+    if (!device) {
+      return res.status(404).json({ success: false, message: "Device not found" });
+    }
+    const result = await revokeCentralSessionsByDevice(device.deviceId, {
+      id: req.centralAccessUser?.id || null,
+      email: req.centralAccessUser?.email || "central-admin",
+      deviceId: getCentralDeviceId(req),
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to logout device";
+    return res.status(400).json({ success: false, message });
+  }
+});
+
+router.get("/central/auth/master-status", requireCentralSessionAccess, async (req, res) => {
+  const status = await getMasterAccessStatus(
+    req.centralAccessUser,
+    req.centralAccessSession,
+    getCentralDeviceId(req)
+  );
+  return res.json({ success: true, data: status });
+});
+
+router.post("/central/auth/master/request-otp", requireCentralSessionAccess, async (req, res) => {
+  try {
+    const result = await requestMasterAccessOtp(
+      req.centralAccessUser,
+      req.centralAccessSession,
+      getCentralRequestMeta(req)
+    );
+    return res.json({
+      success: true,
+      data: {
+        email: result.email,
+        expiresAt: result.expiresAt,
+        otpTtlMinutes: OTP_TTL_MINUTES,
+        unlockTtlMinutes: MASTER_UNLOCK_TTL_MINUTES,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to send master data OTP";
+    return res.status(400).json({ success: false, message });
+  }
+});
+
+router.post("/central/auth/master/verify-otp", requireCentralSessionAccess, async (req, res) => {
+  try {
+    const otp = String(req.body?.otp || "").trim();
+    if (!otp) {
+      return res.status(400).json({ success: false, message: "OTP is required" });
+    }
+    const result = await verifyMasterAccessOtp(
+      req.centralAccessUser,
+      req.centralAccessSession,
+      otp,
+      getCentralRequestMeta(req)
+    );
+    return res.json({
+      success: true,
+      data: {
+        expiresAt: result.expiresAt,
+        unlockTtlMinutes: MASTER_UNLOCK_TTL_MINUTES,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to verify master data OTP";
+    return res.status(400).json({ success: false, message });
+  }
+});
+
+router.post("/central/auth/master/logout", requireCentralSessionAccess, async (req, res) => {
+  await revokeMasterAccess(req.centralAccessSession.id, {
+    ...req.centralAccessUser,
+    deviceId: getCentralDeviceId(req),
+  });
+  return res.json({ success: true, message: "Master data access disabled" });
+});
+
+router.post("/central/admin-auth", async (req, res) => {
+  const password = String(req.body?.password || "");
+  const verification = verifyCentralAdminPassword(password);
+
+  if (!verification.verified) {
+    return res.status(401).json({ success: false, message: verification.message || "Invalid admin password" });
+  }
+
+  const session = issueCentralAdminToken();
+  return res.json({
+    success: true,
+    data: {
+      verified: true,
+      token: session.token,
+      expiresAt: session.expiresAt,
+    },
+  });
+});
+
 router.post("/push/send", async (req, res) => {
   const token = String(req.body?.token || "").trim();
   const title = String(req.body?.title || "").trim();
@@ -1377,6 +1831,22 @@ router.get("/low-stock/settings/:shopLocationId", async (req, res) => {
   }
 });
 
+router.get("/high-stock/settings/:shopLocationId", async (req, res) => {
+  const shopLocationId = parseId(req.params.shopLocationId);
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "Invalid shop location id" });
+  }
+
+  try {
+    const data = await getLocationHighStockSettings(shopLocationId);
+    return res.json({ success: true, data });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to load high stock settings";
+    const statusCode = message.toLowerCase().includes("not found") ? 404 : 500;
+    return res.status(statusCode).json({ success: false, message });
+  }
+});
+
 router.put("/low-stock/settings/:shopLocationId", async (req, res) => {
   const shopLocationId = parseId(req.params.shopLocationId);
   if (!shopLocationId) {
@@ -1416,6 +1886,27 @@ router.put("/low-stock/settings/:shopLocationId", async (req, res) => {
   }
 });
 
+router.put("/high-stock/settings/:shopLocationId", async (req, res) => {
+  const shopLocationId = parseId(req.params.shopLocationId);
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "Invalid shop location id" });
+  }
+
+  const location = await prisma.shopLocation.findUnique({ where: { id: shopLocationId } });
+  if (!location) {
+    return res.status(404).json({ success: false, message: "Shop location not found" });
+  }
+
+  try {
+    await saveLocationHighStockSettings(shopLocationId, req.body || {});
+    const data = await getLocationHighStockSettings(shopLocationId);
+    return res.json({ success: true, data });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to save high stock settings";
+    return res.status(400).json({ success: false, message });
+  }
+});
+
 router.get("/low-stock/products", async (req, res) => {
   const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
   if (!shopLocationId) {
@@ -1447,6 +1938,35 @@ router.get("/low-stock/products", async (req, res) => {
       generalThresholdBottles: location.generalThresholdBottles,
       lowCount: location.lowCount,
       rows: location.lowRows,
+    },
+  });
+});
+
+router.get("/high-stock/products", async (req, res) => {
+  const shopLocationId = parseOptionalPositiveInt(req.query.shopLocationId);
+  if (!shopLocationId) {
+    return res.status(400).json({ success: false, message: "shopLocationId is required" });
+  }
+
+  const snapshot = await evaluateHighStock({
+    shopLocationIds: [shopLocationId],
+  });
+  const location = snapshot.locations[0];
+
+  if (!location) {
+    return res.status(404).json({ success: false, message: "Shop location not found" });
+  }
+
+  return res.json({
+    success: true,
+    generatedAt: snapshot.generatedAt,
+    data: {
+      shopLocationId: location.shopLocationId,
+      locationName: location.locationName,
+      locationCode: location.locationCode,
+      generalThresholdBottles: location.generalThresholdBottles,
+      highCount: location.highCount,
+      rows: location.highRows,
     },
   });
 });
@@ -1534,6 +2054,25 @@ router.get("/low-stock/overview", async (req, res) => {
       locationName: row.locationName,
       generalThresholdBottles: row.generalThresholdBottles,
       lowCount: row.lowCount,
+    })),
+  });
+});
+
+router.get("/high-stock/overview", async (req, res) => {
+  const snapshot = await evaluateHighStock();
+
+  return res.json({
+    success: true,
+    generatedAt: snapshot.generatedAt,
+    enabledLocationCount: snapshot.locationCount,
+    locationsWithHighStock: snapshot.locationsWithHighStock,
+    totalHighProducts: snapshot.totalHighProducts,
+    rows: snapshot.locations.map((row) => ({
+      shopLocationId: row.shopLocationId,
+      locationCode: row.locationCode,
+      locationName: row.locationName,
+      generalThresholdBottles: row.generalThresholdBottles,
+      highCount: row.highCount,
     })),
   });
 });
@@ -1827,8 +2366,6 @@ router.get("/sync-settings", async (req, res) => {
   return res.json({ success: true, data });
 });
 
-router.use("/central", requireCentralAccessToken);
-
 router.put("/sync-settings", async (req, res) => {
   const rawCentralBaseUrl = req.body?.centralBaseUrl;
   if (
@@ -1857,7 +2394,7 @@ router.put("/central/reverse-sync-settings", async (req, res) => {
   return res.json({ success: true, data });
 });
 
-router.post("/central-sync/apply", requireCentralAccessToken, async (req, res) => {
+router.post("/central-sync/apply", async (req, res) => {
   const settings = await getCatalogSyncSettings();
   const hasOperators = Array.isArray(req.body?.operators);
   const hasBestSellers = Array.isArray(req.body?.bestSellers);
@@ -1997,7 +2534,7 @@ router.put("/central/shops/:id", async (req, res) => {
   return res.json({ success: true, data: row });
 });
 
-router.delete("/central/shops/:id", async (req, res) => {
+router.delete("/central/shops/:id", requireCentralAdminAccess, async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) {
     return res.status(400).json({ success: false, message: "Invalid shop id" });
@@ -2071,7 +2608,7 @@ router.put("/central/designations/:id", async (req, res) => {
   return res.json({ success: true, data: row, sync: sync.summary, reverseSync });
 });
 
-router.delete("/central/designations/:id", async (req, res) => {
+router.delete("/central/designations/:id", requireCentralAdminAccess, async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) {
     return res.status(400).json({ success: false, message: "Invalid designation id" });
@@ -2154,7 +2691,7 @@ router.put("/central/work-locations/:id", async (req, res) => {
   return res.json({ success: true, data: row, sync: sync.summary, reverseSync });
 });
 
-router.delete("/central/work-locations/:id", async (req, res) => {
+router.delete("/central/work-locations/:id", requireCentralAdminAccess, async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) {
     return res.status(400).json({ success: false, message: "Invalid work location id" });
@@ -2180,7 +2717,7 @@ router.delete("/central/work-locations/:id", async (req, res) => {
   }
 });
 
-router.get("/central/master-products", async (req, res) => {
+router.get("/central/master-products", requireCentralMasterAccess, async (req, res) => {
   try {
     const query = String(req.query.query || "").trim();
     const limit = Number(req.query.limit || 10000);
@@ -2198,6 +2735,39 @@ router.get("/central/master-products", async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error instanceof Error ? error.message : "Failed to load central master products",
+    });
+  }
+});
+
+router.get("/central/master-products/by-shop", requireCentralMasterAccess, async (req, res) => {
+  try {
+    const query = String(req.query.query || "").trim();
+    const limit = Number(req.query.limit || 10000);
+    const { activeEndpoints, remoteResponses } = await fetchCentralMasterProductsByShop({
+      query,
+      limit,
+    });
+    const rows = flattenCentralMasterProductsByShop(remoteResponses);
+    const shops = summarizeCentralMasterProductShops(remoteResponses);
+
+    return res.json({
+      success: true,
+      generatedAt: new Date().toISOString(),
+      count: rows.length,
+      uniqueItemCodeCount: new Set(rows.map((row) => toLowerTrimmed(row.itemCode)).filter(Boolean)).size,
+      sourceCount: activeEndpoints.length,
+      successCount: remoteResponses.filter((row) => row.success).length,
+      failureCount: remoteResponses.filter((row) => !row.success).length,
+      shops,
+      rows,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to load central master products by shop",
     });
   }
 });
@@ -2376,7 +2946,7 @@ router.put("/central/workers/:id", async (req, res) => {
   return res.json({ success: true, data: mapOperatorRecord(row), sync: sync.summary, reverseSync });
 });
 
-router.delete("/central/workers/:id", async (req, res) => {
+router.delete("/central/workers/:id", requireCentralAdminAccess, async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) {
     return res.status(400).json({ success: false, message: "Invalid operator id" });
@@ -2481,7 +3051,7 @@ router.put("/central/best-selling/:id", async (req, res) => {
   return res.json({ success: true, data: row, sync: sync.summary, reverseSync });
 });
 
-router.delete("/central/best-selling/:id", async (req, res) => {
+router.delete("/central/best-selling/:id", requireCentralAdminAccess, async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) {
     return res.status(400).json({ success: false, message: "Invalid best selling id" });

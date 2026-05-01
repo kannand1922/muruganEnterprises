@@ -50,6 +50,10 @@ model ShopLocation {
   lowStockProductRules LowStockProductRule[]
   lowStockNotificationRuns LowStockNotificationRun[]
   lowStockProductNotificationStates LowStockProductNotificationState[]
+  highStockConfig   HighStockLocationConfig?
+  highStockPackRules    HighStockPackRule[]
+  highStockBrandRules   HighStockBrandRule[]
+  highStockProductRules HighStockProductRule[]
   nilStockConfig   NilStockLocationConfig?
   nilStockNotificationRuns NilStockNotificationRun[]
   nilStockProductNotificationStates NilStockProductNotificationState[]
@@ -454,6 +458,66 @@ model LowStockProductRule {
   @@unique([shopLocationId, normalizedCode], map: "uniq_low_stock_product_rule")
   @@index([shopLocationId, thresholdBottles], map: "idx_low_stock_product_rule_lookup")
   @@map("low_stock_product_rules")
+}
+
+model HighStockLocationConfig {
+  id                      Int      @id @default(autoincrement())
+  shopLocationId          Int      @unique @map("shop_location_id")
+  generalThresholdBottles Int      @default(0) @map("general_threshold_bottles")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@map("high_stock_location_config")
+}
+
+model HighStockPackRule {
+  id               Int      @id @default(autoincrement())
+  shopLocationId   Int      @map("shop_location_id")
+  packValue        String   @map("pack_value")
+  normalizedPack   String   @map("normalized_pack")
+  thresholdBottles Int      @map("threshold_bottles")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@unique([shopLocationId, normalizedPack], map: "uniq_high_stock_pack_rule")
+  @@index([shopLocationId, thresholdBottles], map: "idx_high_stock_pack_rule_lookup")
+  @@map("high_stock_pack_rules")
+}
+
+model HighStockBrandRule {
+  id               Int      @id @default(autoincrement())
+  shopLocationId   Int      @map("shop_location_id")
+  brandName        String   @map("brand_name")
+  normalizedBrand  String   @map("normalized_brand")
+  thresholdBottles Int      @map("threshold_bottles")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@unique([shopLocationId, normalizedBrand], map: "uniq_high_stock_brand_rule")
+  @@index([shopLocationId, thresholdBottles], map: "idx_high_stock_brand_rule_lookup")
+  @@map("high_stock_brand_rules")
+}
+
+model HighStockProductRule {
+  id               Int      @id @default(autoincrement())
+  shopLocationId   Int      @map("shop_location_id")
+  itemCode         String   @map("item_code")
+  normalizedCode   String   @map("normalized_code")
+  thresholdBottles Int      @map("threshold_bottles")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  shopLocation ShopLocation @relation(fields: [shopLocationId], references: [id], onDelete: Cascade)
+
+  @@unique([shopLocationId, normalizedCode], map: "uniq_high_stock_product_rule")
+  @@index([shopLocationId, thresholdBottles], map: "idx_high_stock_product_rule_lookup")
+  @@map("high_stock_product_rules")
 }
 
 model FcmDeviceToken {

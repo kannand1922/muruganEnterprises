@@ -205,6 +205,37 @@ export type LowStockProductsResponse = {
   rows: LowStockProductRow[];
 };
 
+export type HighStockSettings = {
+  shopLocationId: number;
+  locationCode: string;
+  locationName: string;
+  generalThresholdBottles?: number;
+  packRules: Array<{ packValue: string; thresholdBottles: number }>;
+  brandRules?: Array<{ brandName: string; thresholdBottles: number }>;
+  productRules: Array<{ itemCode: string; thresholdBottles: number }>;
+};
+
+export type HighStockProductRow = {
+  itemCode: string;
+  itemName: string;
+  brandName: string;
+  packValue: string;
+  displayName: string;
+  thresholdBottles: number;
+  currentBottles: number;
+  excessBottles: number;
+  ruleType: "product" | "pack";
+};
+
+export type HighStockProductsResponse = {
+  shopLocationId: number;
+  locationName: string;
+  locationCode: string;
+  generalThresholdBottles?: number;
+  highCount: number;
+  rows: HighStockProductRow[];
+};
+
 export type NilStockSettings = {
   shopLocationId: number;
   locationCode: string;
@@ -252,6 +283,23 @@ export type LowStockOverview = {
   locationsWithLowStock: number;
   totalLowProducts: number;
   rows: LowStockOverviewRow[];
+};
+
+export type HighStockOverviewRow = {
+  shopLocationId: number;
+  locationCode: string;
+  locationName: string;
+  generalThresholdBottles?: number;
+  highCount: number;
+};
+
+export type HighStockOverview = {
+  success: boolean;
+  generatedAt: string;
+  enabledLocationCount: number;
+  locationsWithHighStock: number;
+  totalHighProducts: number;
+  rows: HighStockOverviewRow[];
 };
 
 export type LowStockNotificationRow = {
@@ -607,6 +655,29 @@ export async function getLowStockProducts(shopLocationId: number) {
   return result.data;
 }
 
+export async function getHighStockSettings(shopLocationId: number) {
+  const result = await apiGet<ApiEnvelope<HighStockSettings>>(`/meta/high-stock/settings/${shopLocationId}`);
+  return result.data;
+}
+
+export async function saveHighStockSettings(
+  shopLocationId: number,
+  payload: {
+    packRules: Array<{ packValue: string; thresholdBottles: number }>;
+    productRules: Array<{ itemCode: string; thresholdBottles: number }>;
+  }
+) {
+  const result = await apiPut<ApiEnvelope<HighStockSettings>>(`/meta/high-stock/settings/${shopLocationId}`, payload);
+  return result.data;
+}
+
+export async function getHighStockProducts(shopLocationId: number) {
+  const result = await apiGet<ApiEnvelope<HighStockProductsResponse>>(
+    `/meta/high-stock/products?shopLocationId=${encodeURIComponent(String(shopLocationId))}`
+  );
+  return result.data;
+}
+
 export async function getNilStockSettings(shopLocationId: number) {
   const result = await apiGet<ApiEnvelope<NilStockSettings>>(`/meta/nil-stock/settings/${shopLocationId}`);
   return result.data;
@@ -632,6 +703,10 @@ export async function getNilStockProducts(shopLocationId: number) {
 
 export async function getLowStockOverview() {
   return apiGet<LowStockOverview>("/meta/low-stock/overview");
+}
+
+export async function getHighStockOverview() {
+  return apiGet<HighStockOverview>("/meta/high-stock/overview");
 }
 
 export async function checkLowStockNow(payload: { shopLocationId?: number; dryRun?: boolean } = {}) {

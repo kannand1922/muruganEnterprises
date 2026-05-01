@@ -15,6 +15,7 @@ import {
   peopleOutline,
   phonePortraitOutline,
   printOutline,
+  prismOutline,
   layersOutline,
   settingsOutline,
   swapHorizontalOutline,
@@ -58,6 +59,12 @@ const settingItems = [
     subtitle: "Threshold rules, FCM mapping and push alerts",
     icon: notificationsOutline,
     path: "/settings/low-stock-alerts",
+  },
+  {
+    title: "High Stock",
+    subtitle: "Threshold rules and excess stock review",
+    icon: prismOutline,
+    path: "/settings/high-stock-alerts",
   },
   {
     title: "Printers",

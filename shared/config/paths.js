@@ -13,6 +13,10 @@ const STOCK_LENS_SETTINGS_PASSWORD_FILE = path.join(
   CONFIG_DIR,
   "settings-password.txt"
 );
+const STOCK_LENS_CENTRAL_ADMIN_PASSWORD_FILE = path.join(
+  CONFIG_DIR,
+  "central-admin-password.txt"
+);
 const STOCK_LENS_REQUIRED_BUILD_FILE = path.join(
   CONFIG_DIR,
   "required-build.txt"
@@ -24,6 +28,46 @@ const STOCK_LENS_MASTER_MAX_AGE_FILE = path.join(
 const STOCK_LENS_DIFF_IMAGE_PATH_FILE = path.join(
   CONFIG_DIR,
   "diff-image-path.txt"
+);
+const STOCK_LENS_SCANNER_SSL_CERT_PATH_FILE = path.join(
+  CONFIG_DIR,
+  "scanner-ssl-cert-path.txt"
+);
+const STOCK_LENS_SCANNER_SSL_KEY_PATH_FILE = path.join(
+  CONFIG_DIR,
+  "scanner-ssl-key-path.txt"
+);
+const STOCK_LENS_CENTRAL_ALLOWED_ORIGINS_FILE = path.join(
+  CONFIG_DIR,
+  "central-allowed-origins.txt"
+);
+const STOCK_LENS_CENTRAL_SMTP_FROM_FILE = path.join(
+  CONFIG_DIR,
+  "central-smtp-from.txt"
+);
+const STOCK_LENS_CENTRAL_SMTP_HOST_FILE = path.join(
+  CONFIG_DIR,
+  "central-smtp-host.txt"
+);
+const STOCK_LENS_CENTRAL_SMTP_PORT_FILE = path.join(
+  CONFIG_DIR,
+  "central-smtp-port.txt"
+);
+const STOCK_LENS_CENTRAL_SMTP_USER_FILE = path.join(
+  CONFIG_DIR,
+  "central-smtp-user.txt"
+);
+const STOCK_LENS_CENTRAL_SMTP_PASS_FILE = path.join(
+  CONFIG_DIR,
+  "central-smtp-pass.txt"
+);
+const STOCK_LENS_CENTRAL_SMTP_SECURE_FILE = path.join(
+  CONFIG_DIR,
+  "central-smtp-secure.txt"
+);
+const STOCK_LENS_CENTRAL_OWNER_EMAIL_FILE = path.join(
+  CONFIG_DIR,
+  "central-owner-email.txt"
 );
 
 const stockLensPaths = {
@@ -60,9 +104,20 @@ const receiptPaths = {
 const stockLensScannerConfigPaths = {
   configDir: CONFIG_DIR,
   settingsPasswordFile: STOCK_LENS_SETTINGS_PASSWORD_FILE,
+  centralAdminPasswordFile: STOCK_LENS_CENTRAL_ADMIN_PASSWORD_FILE,
   requiredBuildFile: STOCK_LENS_REQUIRED_BUILD_FILE,
   masterMaxAgeMinutesFile: STOCK_LENS_MASTER_MAX_AGE_FILE,
   diffImagePathFile: STOCK_LENS_DIFF_IMAGE_PATH_FILE,
+  scannerSslCertPathFile: STOCK_LENS_SCANNER_SSL_CERT_PATH_FILE,
+  scannerSslKeyPathFile: STOCK_LENS_SCANNER_SSL_KEY_PATH_FILE,
+  centralAllowedOriginsFile: STOCK_LENS_CENTRAL_ALLOWED_ORIGINS_FILE,
+  centralSmtpFromFile: STOCK_LENS_CENTRAL_SMTP_FROM_FILE,
+  centralSmtpHostFile: STOCK_LENS_CENTRAL_SMTP_HOST_FILE,
+  centralSmtpPortFile: STOCK_LENS_CENTRAL_SMTP_PORT_FILE,
+  centralSmtpUserFile: STOCK_LENS_CENTRAL_SMTP_USER_FILE,
+  centralSmtpPassFile: STOCK_LENS_CENTRAL_SMTP_PASS_FILE,
+  centralSmtpSecureFile: STOCK_LENS_CENTRAL_SMTP_SECURE_FILE,
+  centralOwnerEmailFile: STOCK_LENS_CENTRAL_OWNER_EMAIL_FILE,
 };
 
 module.exports = {
