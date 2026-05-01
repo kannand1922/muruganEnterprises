@@ -1885,8 +1885,7 @@ function App() {
   async function loadShops() {
     setSettingsLoading(true);
     try {
-      const [shopRows, workerRows, bestSellingData, reverseSettings, masterRows, designationRows, workLocationRows] =
-        await Promise.all([
+      const results = await Promise.allSettled([
         getCentralShops(true),
         getCentralWorkers(true),
         getCentralBestSelling(true),
@@ -1895,14 +1894,60 @@ function App() {
         getCentralDesignations(true),
         getCentralWorkLocations(true),
       ]);
-      setShops(shopRows);
-      setWorkers(workerRows);
-      setBestSellingRows(bestSellingData);
-      setDesignations(designationRows);
-      setWorkLocations(workLocationRows);
-      setReverseSyncSettings(reverseSettings);
-      setSavedReverseSyncSettings(reverseSettings);
-      setMasterProducts(masterRows);
+
+      const [shopsResult, workersResult, bestSellingResult, reverseSettingsResult, masterProductsResult, designationsResult, workLocationsResult] =
+        results;
+
+      const failedSections: string[] = [];
+
+      if (shopsResult.status === "fulfilled") {
+        setShops(shopsResult.value);
+      } else {
+        failedSections.push("shops");
+      }
+
+      if (workersResult.status === "fulfilled") {
+        setWorkers(workersResult.value);
+      } else {
+        failedSections.push("workers");
+      }
+
+      if (bestSellingResult.status === "fulfilled") {
+        setBestSellingRows(bestSellingResult.value);
+      } else {
+        failedSections.push("best selling");
+      }
+
+      if (reverseSettingsResult.status === "fulfilled") {
+        setReverseSyncSettings(reverseSettingsResult.value);
+        setSavedReverseSyncSettings(reverseSettingsResult.value);
+      } else {
+        failedSections.push("reverse sync");
+      }
+
+      if (masterProductsResult.status === "fulfilled") {
+        setMasterProducts(masterProductsResult.value);
+      } else {
+        failedSections.push("master products");
+      }
+
+      if (designationsResult.status === "fulfilled") {
+        setDesignations(designationsResult.value);
+      } else {
+        failedSections.push("designations");
+      }
+
+      if (workLocationsResult.status === "fulfilled") {
+        setWorkLocations(workLocationsResult.value);
+      } else {
+        failedSections.push("work locations");
+      }
+
+      if (failedSections.length) {
+        setError(`Some central settings failed to load: ${failedSections.join(", ")}`);
+      } else {
+        setError(null);
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load shop settings");
     } finally {
