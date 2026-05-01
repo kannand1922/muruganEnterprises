@@ -44,7 +44,8 @@ function SettingsAccessLifecycle() {
     const path = String(location.pathname || "");
     const isSettingsPath = path === "/settings" || path.startsWith("/settings/");
     const isSettingsUnlockPath = path === "/settings-unlock";
-    if (!isSettingsPath && !isSettingsUnlockPath) {
+    const isSettingsLinkedStockPath = path === "/stock/low-stock" || path === "/stock/high-stock";
+    if (!isSettingsPath && !isSettingsUnlockPath && !isSettingsLinkedStockPath) {
       clearSettingsAccess();
     }
   }, [location.pathname]);

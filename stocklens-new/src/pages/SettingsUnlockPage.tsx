@@ -31,8 +31,11 @@ export function SettingsUnlockPage() {
 
   const nextPath = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
-    const next = searchParams.get("next");
-    return next && next.startsWith("/settings") ? next : "/settings";
+    const next = String(searchParams.get("next") || "").trim();
+    if (!next) return "/settings";
+    if (next === "/settings") return next;
+    if (next.startsWith("/settings/")) return next;
+    return "/settings";
   }, [location.search]);
 
   useEffect(() => {

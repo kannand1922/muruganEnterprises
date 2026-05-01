@@ -18,7 +18,11 @@ export function SettingsProtectedRoute({
           return <Component {...props} />;
         }
 
-        const next = `${props.location.pathname}${props.location.search || ""}`;
+        const currentPath = `${props.location.pathname}${props.location.search || ""}`;
+        const next =
+          currentPath === "/settings" || currentPath.startsWith("/settings/")
+            ? currentPath
+            : "/settings";
         return <Redirect to={`/settings-unlock?next=${encodeURIComponent(next)}`} />;
       }}
     />
