@@ -1890,7 +1890,7 @@ function App() {
         getCentralWorkers(true),
         getCentralBestSelling(true),
         getCentralReverseSyncSettings(),
-        getMasterProducts("", 10000),
+        hasCentralAccessSession() ? getMasterProducts("", 10000) : Promise.resolve<MasterProduct[]>([]),
         getCentralDesignations(true),
         getCentralWorkLocations(true),
       ]);
@@ -2197,6 +2197,33 @@ function App() {
     if (masterProductsByShop || masterDataLoading) return;
     void loadMasterDataByShop(true);
   }, [activePage, masterProductsByShop, masterDataLoading]);
+
+  useEffect(() => {
+    if (activePage !== "best-selling") return;
+    if (!hasCentralAccessSession()) return;
+    if (masterProducts.length > 0) return;
+
+    let cancelled = false;
+
+    const loadMasterProductsForBestSelling = async () => {
+      try {
+        const rows = await getMasterProducts("", 10000);
+        if (!cancelled) {
+          setMasterProducts(rows);
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : "Failed to load master products");
+        }
+      }
+    };
+
+    void loadMasterProductsForBestSelling();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activePage, masterProducts.length]);
 
   async function handleRefresh() {
     setMessage(null);
