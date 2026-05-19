@@ -34,6 +34,7 @@ import {
   type Worker,
   type WorkerPayload,
 } from "../api/metaApi";
+import { REQUIRE_FULL_OPERATOR_DETAILS } from "../config/operatorValidation";
 
 type UploadedAsset = {
   base64: string;
@@ -250,10 +251,12 @@ function normalizeWorkerToForm(row: Worker): WorkerForm {
   };
 }
 
-function validateForm(form: WorkerForm) {
+function validateForm(form: WorkerForm, requireFullOperatorDetails: boolean) {
+  if (!form.name.trim()) return "Name is required";
+  if (!requireFullOperatorDetails) return null;
+
   const validPhones = form.phoneNumbers.filter((row) => row.phoneNumber.trim());
   if (!form.profileImage?.base64) return "Profile image is required";
-  if (!form.name.trim()) return "Name is required";
   if (!form.fatherName.trim()) return "Father's name is required";
   if (!form.designationName.trim()) return "Designation is required";
   if (!form.dateOfBirth) return "Date of birth is required";
@@ -345,6 +348,7 @@ export function SettingsOperatorsPage() {
   const [newDesignationName, setNewDesignationName] = useState("");
   const [newWorkLocationName, setNewWorkLocationName] = useState("");
   const [form, setForm] = useState<WorkerForm>(EMPTY_FORM);
+  const [requireFullOperatorDetails] = useState(REQUIRE_FULL_OPERATOR_DETAILS);
 
   async function loadRows() {
     setLoading(true);
@@ -480,7 +484,7 @@ export function SettingsOperatorsPage() {
   }
 
   async function onSave() {
-    const validationError = validateForm(form);
+    const validationError = validateForm(form, requireFullOperatorDetails);
     if (validationError) {
       presentToast({ message: validationError, color: "warning", duration: 1800 });
       return;
@@ -546,6 +550,11 @@ export function SettingsOperatorsPage() {
             <IonCardTitle>Create Operator Profile</IonCardTitle>
           </IonCardHeader>
           <IonCardContent className="operator-profile-form">
+            <IonNote color={requireFullOperatorDetails ? "medium" : "warning"}>
+              {requireFullOperatorDetails
+                ? "Full operator details are required before saving. Controlled by src/config/operatorValidation.ts."
+                : "Partial operator details are allowed. Only the operator name is required. Controlled by src/config/operatorValidation.ts."}
+            </IonNote>
             <div className="operator-form-section">
               <h3>Profile</h3>
               <IonItem>

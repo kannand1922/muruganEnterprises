@@ -44,6 +44,14 @@ export function SettingsCommonConfigPage() {
     syncBestSellingWithCentral: true,
   });
 
+  function normalizeSyncSettings(data?: CatalogSyncSettings | null): CatalogSyncSettings {
+    return {
+      centralBaseUrl: data?.centralBaseUrl || "",
+      syncOperatorsWithCentral: data?.syncOperatorsWithCentral ?? true,
+      syncBestSellingWithCentral: data?.syncBestSellingWithCentral ?? true,
+    };
+  }
+
   function reloadCurrentValues() {
     const backend = getApiBaseUrl();
     setBackendUrlInput(backend);
@@ -58,10 +66,7 @@ export function SettingsCommonConfigPage() {
   async function loadSyncSettings() {
     try {
       const data = await getCatalogSyncSettings();
-      const normalized = {
-        ...data,
-        centralBaseUrl: data.centralBaseUrl || "",
-      };
+      const normalized = normalizeSyncSettings(data);
       setSyncSettings(normalized);
       setSavedSyncSettings(normalized);
     } catch (error) {
@@ -123,10 +128,7 @@ export function SettingsCommonConfigPage() {
   async function onSaveSyncSettings() {
     try {
       const data = await updateCatalogSyncSettings(syncSettings);
-      const normalized = {
-        ...data,
-        centralBaseUrl: data.centralBaseUrl || "",
-      };
+      const normalized = normalizeSyncSettings(data);
       setSyncSettings(normalized);
       setSavedSyncSettings(normalized);
       presentToast({ message: "Sync settings saved", color: "success", duration: 1400 });

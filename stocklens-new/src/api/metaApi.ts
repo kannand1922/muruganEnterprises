@@ -18,6 +18,7 @@ export type CatalogSyncSettings = {
   centralBaseUrl: string | null;
   syncOperatorsWithCentral: boolean;
   syncBestSellingWithCentral: boolean;
+  requireFullOperatorDetails?: boolean | null;
 };
 
 export type ShopLocation = {
